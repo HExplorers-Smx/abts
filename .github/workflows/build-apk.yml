@@ -1,0 +1,139 @@
+name: 构建 APK（可选架构）
+
+# 手动触发：Actions → 本工作流 → Run workflow
+# 勾选需要的架构后即可在 GitHub 上构建 APK，构建完成后在本页下方
+# Artifacts 里下载对应安装包。
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型（release 更小更快，debug 方便调试）'
+        required: true
+        type: choice
+        default: release
+        options:
+          - release
+          - debug
+      arm64_v8a:
+        description: 'arm64-v8a（主流手机，几乎都支持，默认勾选）'
+        required: true
+        type: boolean
+        default: true
+      armeabi_v7a:
+        description: 'armeabi-v7a（较老的 32 位手机）'
+        required: true
+        type: boolean
+        default: true
+      x86_64:
+        description: 'x86_64（模拟器 / 少数平板，手机一般用不上）'
+        required: true
+        type: boolean
+        default: false
+      fat:
+        description: '全架构 fat APK（一个包包含所有架构，包体最大）'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 构建 APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 启用 Gradle 依赖缓存
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.6'
+          cache: true
+
+      # 项目依赖的 umeng 插件用了已关停的 jcenter 仓库和动态版本，
+      # 直接构建必然失败。这里安装项目内的 Gradle init 脚本在构建前修复：
+      # 移除 jcenter、固定 umeng 版本、统一 Java/Kotlin 目标。
+      - name: 应用 umeng 构建修复
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cp .github/gradle/umeng-jcenter-fix.gradle ~/.gradle/init.d/
+          echo "构建修复脚本已安装"
+
+      - name: 校验至少选择一个架构
+        if: ${{ inputs.arm64_v8a == 'false' && inputs.armeabi_v7a == 'false' && inputs.x86_64 == 'false' && inputs.fat == 'false' }}
+        run: |
+          echo "::error::请至少勾选一个架构（arm64-v8a / armeabi-v7a / x86_64 / fat）"
+          exit 1
+
+      - name: 构建 APK
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
+        run: |
+          set -e
+          MODE="--release"
+          if [ "$BUILD_TYPE" = "debug" ]; then MODE="--debug"; fi
+          echo "==> flutter build apk --split-per-abi $MODE"
+          flutter build apk --split-per-abi "$MODE" \
+            -Porg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m" \
+            -Pkotlin.daemon.jvmargs="-Xmx2g" \
+            -Porg.gradle.workers.max=2
+          if [ "${{ inputs.fat }}" = "true" ]; then
+            echo "==> flutter build apk $MODE (fat)"
+            flutter build apk "$MODE" \
+              -Porg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m" \
+              -Pkotlin.daemon.jvmargs="-Xmx2g" \
+              -Porg.gradle.workers.max=2
+          fi
+
+      - name: 整理产物
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
+        run: |
+          set -e
+          SRC="build/app/outputs/flutter-apk"
+          mkdir -p dist
+          cp_abi() {
+            local abi="$1" name="$2"
+            local f="$SRC/app-${abi}-${BUILD_TYPE}.apk"
+            [ -f "$f" ] || { echo "::error::缺少产物 $f"; exit 1; }
+            cp "$f" "dist/$name"
+            echo "已打包 $name ($(du -h "$f" | cut -f1))"
+          }
+          [ "${{ inputs.arm64_v8a }}" = "true" ] && cp_abi arm64-v8a abts-arm64-v8a.apk
+          [ "${{ inputs.armeabi_v7a }}" = "true" ] && cp_abi armeabi-v7a abts-armeabi-v7a.apk
+          [ "${{ inputs.x86_64 }}" = "true" ] && cp_abi x86_64 abts-x86_64.apk
+          [ "${{ inputs.fat }}" = "true" ] && cp "$SRC/app-${BUILD_TYPE}.apk" "dist/abts-fat.apk"
+          echo "---- dist ----"
+          ls -la dist
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: abts-apk-${{ inputs.build_type }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 汇总构建信息
+        run: |
+          echo "## 构建完成 ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 版本：\`$(grep '^version:' pubspec.yaml | awk '{print $2}')\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 构建类型：\`${{ inputs.build_type }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 已打包：\`$(ls dist | tr '\n' ' ')\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 下载：本页底部 **Artifacts** 区点击 \`abts-apk-${{ inputs.build_type }}\` 下载" >> $GITHUB_STEP_SUMMARY

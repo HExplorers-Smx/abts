@@ -1,0 +1,43 @@
+// ============================================================================
+// umeng 构建修复（init 脚本）
+// ----------------------------------------------------------------------------
+// 项目依赖 umeng_common_sdk 插件，该插件存在两个历史问题，导致在新环境下
+// 无法直接构建：
+//   1. 声明了已永久关停的 jcenter 仓库 + 动态版本（com.umeng.umsdk:common:+ /
+//      asms:+），动态版本解析必须向仓库列表版本，jcenter 已死会直接报错；
+//   2. 插件模块的 Java/Kotlin 编译目标不一致（Java 1.8 vs Kotlin 17）。
+// 本脚本作为 Gradle init 脚本在项目外修复上述问题：
+//   - 移除 jcenter 仓库（依赖在 Maven Central 上都有）；
+//   - 用 resolutionStrategy 把动态版本固定到 Maven Central 上的具体版本；
+//   - 统一所有 Android 模块的 Java/Kotlin 编译目标为 17。
+// 用法：复制到 ~/.gradle/init.d/ 下即可（本仓库的 GitHub Actions 工作流
+//       .github/workflows/build-apk.yml 会在构建前自动处理）。
+// 注意：这是机器级构建辅助，不属于项目构建配置，不需要提交到
+//       build.gradle.kts / gradle.properties 等配置文件里。
+// ============================================================================
+allprojects {
+    repositories.whenObjectAdded { repo ->
+        if (repo.name == 'jcenter' || repo.name == 'JCenter') {
+            repositories.remove(repo)
+        }
+    }
+    configurations.all {
+        resolutionStrategy {
+            force 'com.umeng.umsdk:common:9.9.10'
+            force 'com.umeng.umsdk:asms:1.8.7.2'
+        }
+    }
+    afterEvaluate { p ->
+        def androidExt = p.extensions.findByName('android')
+        if (androidExt != null) {
+            androidExt.compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+        p.tasks.matching { it.name.startsWith('compile') && it.name.endsWith('Kotlin') }
+            .configureEach { t ->
+                t.kotlinOptions.jvmTarget = '17'
+            }
+    }
+}
