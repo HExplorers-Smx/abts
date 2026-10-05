@@ -73,11 +73,18 @@ jobs:
       #   3. 插件包内同名类 UmengCommonSdkPlugin 同时发布了 Kotlin 版
       #      (src/main/kotlin) 与 Java 版 (src/main/java)，Kotlin 编译器的源根
       #      同时覆盖两个目录，导致 Redeclaration 编译失败 → 删除 Java 副本。
+      # 注意：必须先 flutter pub get 把插件解压进 pub 缓存，再删除副本；
+      #       删除发生在构建前，pub 缓存里的副本只影响本次编译。
       - name: 应用 umeng 构建修复
         run: |
+          flutter pub get
           mkdir -p ~/.gradle/init.d
           cp .github/gradle/umeng-jcenter-fix.gradle ~/.gradle/init.d/
-          rm -f "$HOME/.pub-cache/hosted/pub.dev/umeng_common_sdk-1.3.1/android/src/main/java/com/umeng/umeng_common_sdk/UmengCommonSdkPlugin.java"
+          # 兜底搜索任意 pub 缓存路径（不同 runner 的 PUB_CACHE 位置可能不同）
+          for base in "$HOME/.pub-cache" "$HOME/.flutter-pub-cache" /opt/hostedtoolcache "$HOME/.cache"; do
+            [ -d "$base" ] || continue
+            find "$base" -path "*umeng_common_sdk-1.3.1*/android/src/main/java/com/umeng/umeng_common_sdk/UmengCommonSdkPlugin.java" -delete -print
+          done
           echo "构建修复已应用（jcenter / 动态版本 / JVM 目标 / 重复类声明）"
 
       - name: 校验至少选择一个架构
