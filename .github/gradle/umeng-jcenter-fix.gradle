@@ -1,7 +1,7 @@
 // ============================================================================
 // umeng 构建修复（init 脚本）
 // ----------------------------------------------------------------------------
-// 项目依赖 umeng_common_sdk 插件，该插件存在两个历史问题，导致在新环境下
+// 项目依赖 umeng_common_sdk 插件，该插件存在多个历史问题，导致在新环境下
 // 无法直接构建：
 //   1. 声明了已永久关停的 jcenter 仓库 + 动态版本（com.umeng.umsdk:common:+ /
 //      asms:+），动态版本解析必须向仓库列表版本，jcenter 已死会直接报错；
@@ -10,6 +10,11 @@
 //   - 移除 jcenter 仓库（依赖在 Maven Central 上都有）；
 //   - 用 resolutionStrategy 把动态版本固定到 Maven Central 上的具体版本；
 //   - 统一所有 Android 模块的 Java/Kotlin 编译目标为 17。
+// 另外还有第三个问题：插件包内同名类 UmengCommonSdkPlugin 同时存在 Kotlin
+// 版（src/main/kotlin）与 Java 版（src/main/java）两个实现，Kotlin 编译器的
+// 源根同时覆盖两个目录，导致 Redeclaration 编译失败。该问题由构建脚本
+// （GitHub Actions 工作流的"应用 umeng 构建修复"步骤）在构建前删除 Java
+// 副本解决，不在此 init 脚本内处理。
 // 用法：复制到 ~/.gradle/init.d/ 下即可（本仓库的 GitHub Actions 工作流
 //       .github/workflows/build-apk.yml 会在构建前自动处理）。
 // 注意：这是机器级构建辅助，不属于项目构建配置，不需要提交到

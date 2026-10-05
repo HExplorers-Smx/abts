@@ -65,14 +65,20 @@ jobs:
           flutter-version: '3.47.6'
           cache: true
 
-      # 项目依赖的 umeng 插件用了已关停的 jcenter 仓库和动态版本，
-      # 直接构建必然失败。这里安装项目内的 Gradle init 脚本在构建前修复：
-      # 移除 jcenter、固定 umeng 版本、统一 Java/Kotlin 目标。
+      # 项目依赖的 umeng_common_sdk 插件存在三个历史问题，直接构建必然失败，
+      # 这里在构建前统一修复：
+      #   1. jcenter 仓库已永久关停 + 动态版本（common:+ / asms:+）→ 由 init
+      #      脚本移除 jcenter 并固定到 Maven Central 上的具体版本；
+      #   2. 插件模块 Java/Kotlin 编译目标不一致 → 由 init 脚本统一为 17；
+      #   3. 插件包内同名类 UmengCommonSdkPlugin 同时发布了 Kotlin 版
+      #      (src/main/kotlin) 与 Java 版 (src/main/java)，Kotlin 编译器的源根
+      #      同时覆盖两个目录，导致 Redeclaration 编译失败 → 删除 Java 副本。
       - name: 应用 umeng 构建修复
         run: |
           mkdir -p ~/.gradle/init.d
           cp .github/gradle/umeng-jcenter-fix.gradle ~/.gradle/init.d/
-          echo "构建修复脚本已安装"
+          rm -f "$HOME/.pub-cache/hosted/pub.dev/umeng_common_sdk-1.3.1/android/src/main/java/com/umeng/umeng_common_sdk/UmengCommonSdkPlugin.java"
+          echo "构建修复已应用（jcenter / 动态版本 / JVM 目标 / 重复类声明）"
 
       - name: 校验至少选择一个架构
         if: ${{ inputs.arm64_v8a == 'false' && inputs.armeabi_v7a == 'false' && inputs.x86_64 == 'false' && inputs.fat == 'false' }}
