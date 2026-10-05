@@ -35,6 +35,8 @@ class AppTheme {
   static const Color accentLilac = Color(0xFF8FA7FC);
   /// 冰蓝（分隔 / 勾勒）
   static const Color accentIce = Color(0xFFA8D9FC);
+  /// 错误红（失败状态等）
+  static const Color error = Color(0xFFE5484D);
   /// 月白（亮色面 / 正文）
   static const Color accentMoon = Color(0xFFEDF2FC);
   /// 深空蓝（深色面 / 深色文字）
@@ -88,6 +90,8 @@ class AppTheme {
   static Color get toneInk => isDark ? accentMoon : accentNavy;
   /// 深蓝 / 青蓝：检查更新
   static Color get toneDeep => isDark ? accentSoft : accentDeep;
+  /// 天蓝 / 深蓝：我的下载
+  static Color get toneDownload => isDark ? accentSoft : accentDeep;
 
   static ThemeData dark() => _build(Brightness.dark, _dark());
 

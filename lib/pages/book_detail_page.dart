@@ -6,8 +6,10 @@ import '../core/storage/shelf_store.dart';
 import '../core/theme/app_theme.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
+import '../models/download_task.dart';
 import '../player/book_player.dart';
 import '../services/bili_api.dart';
+import '../services/download_manager.dart';
 import '../services/umeng_analytics.dart';
 import '../utils/format.dart';
 import '../widgets/book_cover.dart';
@@ -96,6 +98,12 @@ class _BookDetailPageState extends State<BookDetailPage> {
     final onShelf = shelf.isOnShelf(book.bvid);
     final shelfBook = shelf.byBvid(book.bvid);
     final chapters = book.chapters ?? [];
+    final dl = context.watch<DownloadManager>();
+    final dlTasks = {
+      for (final t in dl.store.tasksForBook(book.bvid)) t.cid: t,
+    };
+    final allDownloaded = chapters.isNotEmpty &&
+        chapters.every((c) => dlTasks[c.cid]?.completed == true);
 
     final isCurrentBook = player.book?.bvid == book.bvid;
     final currentIdx = isCurrentBook ? player.index : -1;
@@ -143,6 +151,20 @@ class _BookDetailPageState extends State<BookDetailPage> {
                         ),
                       ),
                       const Spacer(),
+                      IconButton(
+                        onPressed: chapters.isEmpty || allDownloaded
+                            ? null
+                            : () => dl.enqueueAll(book),
+                        tooltip: allDownloaded ? '已全部下载' : '下载全部',
+                        icon: Icon(
+                          allDownloaded
+                              ? Icons.download_done_rounded
+                              : Icons.download_rounded,
+                          color: allDownloaded
+                              ? AppTheme.accent
+                              : AppTheme.textSub,
+                        ),
+                      ),
                       TextButton.icon(
                         onPressed: chapters.isEmpty
                             ? null
@@ -180,6 +202,8 @@ class _BookDetailPageState extends State<BookDetailPage> {
                     isPlaying:
                         i == currentIdx && isCurrentBook && player.isPlaying,
                     onTap: () => _playFrom(i),
+                    dlTask: dlTasks[chapters[i].cid],
+                    onDownloadTap: () => _onDownloadTap(dl, chapters[i], i),
                   );
                 }),
                 const SizedBox(height: 16),
@@ -473,6 +497,59 @@ class _BookDetailPageState extends State<BookDetailPage> {
     );
   }
 
+  /// 章节下载按钮：未下载→入队；下载中/排队→暂停；暂停/失败→恢复；已完成→删除
+  void _onDownloadTap(DownloadManager dl, Chapter chapter, int index) {
+    final task = dl.store.taskFor(widget.bvid, chapter.cid);
+    if (task == null) {
+      dl.enqueue(_book!, chapter, index);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已加入下载队列：第 ${index + 1} 章'),
+          duration: const Duration(milliseconds: 1200),
+        ),
+      );
+      return;
+    }
+    switch (task.status) {
+      case DownloadStatus.queued:
+      case DownloadStatus.downloading:
+        dl.pause(widget.bvid, chapter.cid);
+        break;
+      case DownloadStatus.paused:
+      case DownloadStatus.failed:
+        dl.resume(widget.bvid, chapter.cid);
+        break;
+      case DownloadStatus.completed:
+        _confirmDeleteDownload(dl, task);
+        break;
+    }
+  }
+
+  Future<void> _confirmDeleteDownload(
+      DownloadManager dl, DownloadTask task) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: Text('删除下载',
+            style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
+        content: Text('删除「${task.part}」的本地文件？',
+            style: TextStyle(fontSize: 13, color: AppTheme.textSub)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('取消', style: TextStyle(color: AppTheme.textSub)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('删除', style: TextStyle(color: AppTheme.accent)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await dl.delete(widget.bvid, task.cid);
+  }
+
   Future<void> _playFrom(int index) async {
     final player = context.read<BookPlayer>();
     player.flushProgress();
@@ -487,6 +564,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 }
 
+
 class _ChapterTile extends StatelessWidget {
   final int index;
   final Chapter chapter;
@@ -494,6 +572,8 @@ class _ChapterTile extends StatelessWidget {
   final bool isCurrent;
   final bool isPlaying;
   final VoidCallback onTap;
+  final DownloadTask? dlTask;
+  final VoidCallback onDownloadTap;
 
   const _ChapterTile({
     required this.index,
@@ -502,6 +582,8 @@ class _ChapterTile extends StatelessWidget {
     required this.isCurrent,
     required this.isPlaying,
     required this.onTap,
+    this.dlTask,
+    required this.onDownloadTap,
   });
 
   /// 标题自带序号（01xxx / 第 1 章 / P1 / 1 · xxx）时不再重复加序号
@@ -579,6 +661,7 @@ class _ChapterTile extends StatelessWidget {
               Icon(Icons.check_rounded, size: 15, color: AppTheme.textHint),
               const SizedBox(width: 6),
             ],
+            _buildDownloadControl(context),
             const SizedBox(width: 8),
             Text(
               chapter.durationText,
@@ -588,5 +671,76 @@ class _ChapterTile extends StatelessWidget {
         ),
       ),
     );
+  }
+  /// 章节下载状态按钮：未下载/排队/下载中/暂停/失败/已完成
+  Widget _buildDownloadControl(BuildContext context) {
+    final t = dlTask;
+    if (t == null) {
+      return IconButton(
+        tooltip: '下载本章',
+        visualDensity: VisualDensity.compact,
+        onPressed: onDownloadTap,
+        icon: Icon(Icons.download_outlined,
+            size: 19, color: AppTheme.textSub),
+      );
+    }
+    switch (t.status) {
+      case DownloadStatus.queued:
+        return IconButton(
+          tooltip: '等待下载',
+          visualDensity: VisualDensity.compact,
+          onPressed: onDownloadTap,
+          icon: Icon(Icons.schedule_rounded,
+              size: 19, color: AppTheme.textHint),
+        );
+      case DownloadStatus.downloading:
+        return InkWell(
+          onTap: onDownloadTap,
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    value: t.totalBytes > 0 ? t.progress : null,
+                    strokeWidth: 2.2,
+                    color: AppTheme.accent,
+                  ),
+                ),
+                Icon(Icons.pause_rounded, size: 13, color: AppTheme.accent),
+              ],
+            ),
+          ),
+        );
+      case DownloadStatus.paused:
+        return IconButton(
+          tooltip: '继续下载',
+          visualDensity: VisualDensity.compact,
+          onPressed: onDownloadTap,
+          icon: Icon(Icons.play_circle_outline_rounded,
+              size: 21, color: AppTheme.accent),
+        );
+      case DownloadStatus.failed:
+        return IconButton(
+          tooltip: '重试下载',
+          visualDensity: VisualDensity.compact,
+          onPressed: onDownloadTap,
+          icon: Icon(Icons.refresh_rounded,
+              size: 19, color: AppTheme.error),
+        );
+      case DownloadStatus.completed:
+        return IconButton(
+          tooltip: '已下载（点击删除）',
+          visualDensity: VisualDensity.compact,
+          onPressed: onDownloadTap,
+          icon: Icon(Icons.download_done_rounded,
+              size: 19, color: AppTheme.accent),
+        );
+    }
   }
 }

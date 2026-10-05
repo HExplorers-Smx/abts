@@ -13,6 +13,7 @@ import '../models/book.dart';
 import '../models/chapter.dart';
 import '../services/audio_focus.dart';
 import '../services/bili_api.dart';
+import '../services/download_store.dart';
 import '../services/umeng_analytics.dart';
 
 /// 听书播放器：按"章节"连播 + 断点续播 + 睡眠定时 + 系统媒体会话
@@ -272,16 +273,26 @@ class BookPlayer extends ChangeNotifier {
         throw StateError('章节索引越界：$index');
       }
       final chapter = _chapters[index];
-      final candidates = await _fetchStreamCandidates(chapter.cid);
+      // 已下载的章节优先播本地文件，失败自动回退在线流
+      final candidates = <String>[];
+      final localPath =
+          DownloadStore.instance.localPathFor(_book!.bvid, chapter.cid);
+      if (localPath != null && await File(localPath).exists()) {
+        candidates.add(localPath);
+        debugPrint('[BookPlayer] 使用本地已下载文件: $localPath');
+      }
+      candidates.addAll(await _fetchStreamCandidates(chapter.cid));
       if (candidates.isEmpty) {
         throw StateError('获取音频链接失败（章节可能无法播放）');
       }
 
       for (var i = 0; i < candidates.length; i++) {
         final url = candidates[i];
+        final isLocal = i == 0 && url == localPath;
         try {
           // 有续播位置时先打开再精确跳转，保证落点准确到秒
-          await _player.open(Media(url, httpHeaders: _streamHeaders()),
+          await _player.open(
+              isLocal ? Media(url) : Media(url, httpHeaders: _streamHeaders()),
               play: resumeMs <= 0);
           if (resumeMs > 0) {
             await _seekToResume(resumeMs);

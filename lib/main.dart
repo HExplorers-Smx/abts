@@ -16,6 +16,7 @@ import 'pages/splash_screen.dart';
 import 'player/bili_audio_handler.dart';
 import 'player/book_player.dart';
 import 'services/auth_store.dart';
+import 'services/download_manager.dart';
 import 'services/umeng_analytics.dart';
 
 Future<void> main() async {
@@ -36,6 +37,7 @@ Future<void> _bootstrap() async {
     await Future.wait([
       BiliClient.instance.initLocal(),
       ShelfStore.instance.load(),
+      DownloadManager.instance.init(),
       ThemeController.instance.load(),
       SearchHistoryStore.instance.load(),
       LoginStore.instance.load(),
@@ -109,13 +111,16 @@ class _AbTingShuAppState extends State<AbTingShuApp>
     super.dispose();
   }
 
-  /// 退到后台/被系统回收前落库进度，保证下次续播精确到秒
+  /// 退到后台/被系统回收前落库进度，保证下次续播精确到秒；
+  /// 回前台时恢复被系统挂起的下载任务（断点续传）
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.hidden) {
       BookPlayer.instance.flushProgress();
+    } else if (state == AppLifecycleState.resumed) {
+      DownloadManager.instance.onAppResumed();
     }
   }
 
@@ -128,6 +133,7 @@ class _AbTingShuAppState extends State<AbTingShuApp>
         ChangeNotifierProvider.value(value: BookPlayer.instance),
         ChangeNotifierProvider.value(value: LoginStore.instance),
         ChangeNotifierProvider.value(value: SearchHistoryStore.instance),
+        ChangeNotifierProvider.value(value: DownloadManager.instance),
       ],
       child: AnimatedBuilder(
         animation: tc,

@@ -6,12 +6,15 @@ import '../core/app_meta.dart';
 import '../core/storage/shelf_store.dart';
 import '../core/theme/app_theme.dart';
 import '../core/theme/theme_controller.dart';
+import '../models/download_task.dart';
 import '../player/book_player.dart';
 import '../services/app_update.dart';
 import '../services/auth_store.dart';
+import '../services/download_manager.dart';
 import '../services/umeng_analytics.dart';
 import '../widgets/book_cover.dart';
 import 'about_page.dart';
+import 'downloads_page.dart';
 import 'favorites_page.dart';
 import 'player_page.dart';
 import 'recent_page.dart';
@@ -80,6 +83,14 @@ class MyPage extends StatelessWidget {
             subtitle:
                 reading.isEmpty ? '去发现找一本想听的书' : '共 ${reading.length} 本在听',
             onTap: () => _push(context, const RecentPage()),
+          ),
+          _menuTile(
+            context,
+            icon: Icons.download_rounded,
+            color: AppTheme.toneDownload,
+            title: '我的下载',
+            subtitle: _downloadSubtitle(),
+            onTap: () => _push(context, const DownloadsPage()),
           ),
           _menuTile(
             context,
@@ -396,6 +407,13 @@ class MyPage extends StatelessWidget {
     final r = player.sleepRemaining;
     if (r == Duration.zero) return '未开启 · 到点自动暂停';
     return '还剩 ${r.inMinutes == 0 ? '${r.inSeconds}秒' : '${r.inMinutes} 分钟'}';
+  }
+
+  String _downloadSubtitle() {
+    final store = DownloadManager.instance.store;
+    final done = store.doneCount;
+    if (done <= 0) return '离线收听，省流量';
+    return '已下载 $done 章 · ${DownloadTask.formatBytes(store.totalBytes)}';
   }
 
   String _themeSubtitle() => switch (ThemeController.instance.mode) {
