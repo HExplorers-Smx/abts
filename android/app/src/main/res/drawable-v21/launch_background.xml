@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 启动画面：品牌深空蓝底 + 居中 LOGO（Android 5.0+ 高版本用同一套布局） -->
+<!-- 启动画面：白色底 + 居中 LOGO（Android 5.0+ 高版本用同一套布局） -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
-        <color android:color="#040F30" />
+        <color android:color="#FFFFFF" />
     </item>
     <item>
         <bitmap

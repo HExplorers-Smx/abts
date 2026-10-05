@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 启动画面：品牌深空蓝底 + 居中 LOGO，进程一启动即有画面，避免白屏 -->
+<!-- 启动画面：白色底 + 居中 LOGO，进程一启动即有画面，避免白屏 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
-        <color android:color="#040F30" />
+        <color android:color="#FFFFFF" />
     </item>
     <item>
         <bitmap
