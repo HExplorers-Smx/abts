@@ -139,6 +139,49 @@ class DownloadManager extends ChangeNotifier {
     _pump();
   }
 
+  /// 批量下载指定章节（详情页多选对话框）。
+  /// - 进行中/排队的任务跳过（不重复入队）；
+  /// - 已完成的任务勾选后视为重新下载：先删旧文件与记录，再新建任务；
+  /// - 暂停/失败的任务恢复入队续传。
+  Future<void> enqueueSelected(
+      Book book, List<Chapter> chapters, List<int> indices) async {
+    if (chapters.isEmpty || indices.isEmpty) return;
+    final fresh = <DownloadTask>[];
+    for (final i in indices) {
+      if (i < 0 || i >= chapters.length) continue;
+      final ch = chapters[i];
+      final existing = _store.taskFor(book.bvid, ch.cid);
+      if (existing != null) {
+        if (existing.active) continue; // 进行中/排队中，不重复入队
+        if (existing.completed) {
+          // 重新下载：清掉旧文件与记录
+          await delete(book.bvid, ch.cid);
+        }
+      }
+      final task = DownloadTask(
+        bvid: book.bvid,
+        cid: ch.cid,
+        chapterIndex: i,
+        part: ch.part,
+        bookTitle: book.cleanTitle,
+        pic: Book.normalizePic(book.pic),
+        author: book.author,
+        durationSec: ch.duration,
+        pages: book.pages,
+        status: DownloadStatus.queued,
+      );
+      fresh.add(task);
+      _enqueueKey(task.key);
+    }
+    if (fresh.isNotEmpty) {
+      await _store.addAll(fresh);
+      AppAnalytics.onEvent('download_add_all',
+          {'bvid': book.bvid, 'count': fresh.length});
+      notifyListeners();
+      _pump();
+    }
+  }
+
   /// 整本书未下载的章节全部入队
   Future<void> enqueueAll(Book book) async {
     final chapters = book.chapters;

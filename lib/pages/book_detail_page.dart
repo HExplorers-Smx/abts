@@ -102,9 +102,6 @@ class _BookDetailPageState extends State<BookDetailPage> {
     final dlTasks = {
       for (final t in dl.store.tasksForBook(book.bvid)) t.cid: t,
     };
-    final allDownloaded = chapters.isNotEmpty &&
-        chapters.every((c) => dlTasks[c.cid]?.completed == true);
-
     final isCurrentBook = player.book?.bvid == book.bvid;
     final currentIdx = isCurrentBook ? player.index : -1;
     final resumeIndex = shelfBook?.lastChapterIndex ?? 0;
@@ -152,18 +149,12 @@ class _BookDetailPageState extends State<BookDetailPage> {
                       ),
                       const Spacer(),
                       IconButton(
-                        onPressed: chapters.isEmpty || allDownloaded
+                        onPressed: chapters.isEmpty
                             ? null
-                            : () => dl.enqueueAll(book),
-                        tooltip: allDownloaded ? '已全部下载' : '下载全部',
-                        icon: Icon(
-                          allDownloaded
-                              ? Icons.download_done_rounded
-                              : Icons.download_rounded,
-                          color: allDownloaded
-                              ? AppTheme.accent
-                              : AppTheme.textSub,
-                        ),
+                            : () => _showDownloadPicker(dl, book, chapters, dlTasks),
+                        tooltip: '下载章节',
+                        icon: Icon(Icons.download_rounded,
+                            color: AppTheme.textSub),
                       ),
                       TextButton.icon(
                         onPressed: chapters.isEmpty
@@ -498,6 +489,184 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   /// 章节下载按钮：未下载→入队；下载中/排队→暂停；暂停/失败→恢复；已完成→删除
+  /// 弹出章节多选下载面板：默认勾选未下载章节，可自由增减，
+  /// 已下载章节可勾选重新下载；进行中/排队的章节不可选。
+  Future<void> _showDownloadPicker(DownloadManager dl, Book book,
+      List<Chapter> chapters, Map<int, DownloadTask> dlTasks) async {
+    final selected = <int>{};
+    for (var i = 0; i < chapters.length; i++) {
+      final t = dlTasks[chapters[i].cid];
+      // 未下载 / 暂停 / 失败默认勾选；已下载不默认勾（避免误重下）
+      if (t == null || (!t.active && !t.completed)) selected.add(i);
+    }
+    final doneCount =
+        chapters.where((c) => dlTasks[c.cid]?.completed == true).length;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final activeSet = <int>{
+            for (var i = 0; i < chapters.length; i++)
+              if (dlTasks[chapters[i].cid]?.active ?? false) i,
+          };
+          final selectable = <int>[
+            for (var i = 0; i < chapters.length; i++)
+              if (!activeSet.contains(i)) i,
+          ];
+          final allSelected = selectable.isNotEmpty &&
+              selectable.every(selected.contains);
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.75),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(16, 14, 8, 6),
+                    child: Row(
+                      children: [
+                        Text(
+                          '选择要下载的章节',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700,
+                              color: AppTheme.textMain),
+                        ),
+                        Spacer(),
+                        TextButton(
+                          onPressed: selectable.isEmpty
+                              ? null
+                              : () => setSheet(() {
+                                    if (allSelected) {
+                                      selected.removeAll(selectable);
+                                    } else {
+                                      selected.addAll(selectable);
+                                    }
+                                  }),
+                          child: Text(allSelected ? '取消全选' : '全选',
+                              style: TextStyle(
+                                  fontSize: 13, color: AppTheme.accent)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: chapters.length,
+                      itemBuilder: (context, i) {
+                        final ch = chapters[i];
+                        final t = dlTasks[ch.cid];
+                        final isActive = t?.active ?? false;
+                        final isDone = t?.completed ?? false;
+                        final checked = selected.contains(i);
+                        return ListTile(
+                          dense: true,
+                          onTap: isActive
+                              ? null
+                              : () => setSheet(() {
+                                    if (checked) {
+                                      selected.remove(i);
+                                    } else {
+                                      selected.add(i);
+                                    }
+                                  }),
+                          title: Text(
+                            ch.part,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 13, color: AppTheme.textMain),
+                          ),
+                          subtitle: Text(ch.durationText,
+                              style: TextStyle(
+                                  fontSize: 11, color: AppTheme.textHint)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isDone)
+                                Padding(
+                                  padding: EdgeInsets.only(right: 6),
+                                  child: Text('已下载',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: AppTheme.accent)),
+                                ),
+                              if (isActive)
+                                Padding(
+                                  padding: EdgeInsets.only(right: 6),
+                                  child: Text('下载中',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: AppTheme.textHint)),
+                                ),
+                              Checkbox(
+                                value: isActive ? false : checked,
+                                onChanged: isActive
+                                    ? null
+                                    : (v) => setSheet(() {
+                                          if (v == true) {
+                                            selected.add(i);
+                                          } else {
+                                            selected.remove(i);
+                                          }
+                                        }),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  Divider(height: 1),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(16, 10, 16, 12),
+                    child: Row(
+                      children: [
+                        Text(
+                          selected.isEmpty
+                              ? '未选择章节'
+                              : '已选 ${selected.length} 章'
+                                  '${doneCount > 0 ? '（含已下载 $doneCount 章，将重新下载）' : ''}',
+                          style: TextStyle(
+                              fontSize: 12, color: AppTheme.textSub),
+                        ),
+                        Spacer(),
+                        FilledButton.icon(
+                          onPressed: selected.isEmpty
+                              ? null
+                              : () {
+                                  final picks = selected.toList()..sort();
+                                  Navigator.of(ctx).pop();
+                                  dl.enqueueSelected(book, chapters, picks);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                          '已开始下载 ${picks.length} 章，可在「我的下载」查看/取消'),
+                                      duration: Duration(seconds: 2),
+                                    ),
+                                  );
+                                },
+                          icon: Icon(Icons.download_rounded, size: 18),
+                          label: Text(
+                              selected.isEmpty ? '开始下载' : '开始下载（${selected.length} 章）'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   void _onDownloadTap(DownloadManager dl, Chapter chapter, int index) {
     final task = dl.store.taskFor(widget.bvid, chapter.cid);
     if (task == null) {
