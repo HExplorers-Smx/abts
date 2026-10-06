@@ -55,7 +55,7 @@ class AppUpdate {
   AppUpdate._();
 
   /// GitHub 仓库（检查更新数据源）
-  static const String githubOwner = 'fengqiao57';
+  static const String githubOwner = 'HExplorers-Smx';
   static const String githubRepo = 'abts';
 
   static bool get configured => githubOwner.isNotEmpty && githubRepo.isNotEmpty;

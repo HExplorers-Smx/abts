@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/app_theme.dart';
 
-/// 启动页：品牌深空蓝底 + LOGO + 加载动画。
+/// 启动页：纯白底 + LOGO + 加载动画（与新插画白底风格一致）。
 ///
 /// 纯展示组件：耗时初始化由上层（AbTingShuApp）在后台执行，完成后切换首页。
 class SplashScreen extends StatefulWidget {
@@ -36,20 +36,20 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     final t = CurvedAnimation(parent: _fade, curve: Curves.easeOutCubic);
     return Scaffold(
-      backgroundColor: AppTheme.accentNavy,
+      backgroundColor: AppTheme.surface,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 背景：品牌色 + 极淡的渐变光晕
+          // 背景：纯白 + 极淡的冷灰渐变光晕
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Color(0xFF040F30),
-                  Color(0xFF0A1738),
-                  Color(0xFF040F30),
+                  Color(0xFFFFFFFF),
+                  Color(0xFFF2F4F9),
+                  Color(0xFFFFFFFF),
                 ],
               ),
             ),
@@ -90,12 +90,12 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                   ),
                   const SizedBox(height: 26),
-                  const Text(
+                  Text(
                     '阿B听书',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
-                      color: AppTheme.accentMoon,
+                      color: AppTheme.textMain,
                       letterSpacing: 1.5,
                     ),
                   ),
@@ -104,7 +104,7 @@ class _SplashScreenState extends State<SplashScreen>
                     '把有声小说装进一个专注「听」的播放器',
                     style: TextStyle(
                       fontSize: 12,
-                      color: AppTheme.accentIce.withValues(alpha: 0.7),
+                      color: AppTheme.textSub.withValues(alpha: 0.8),
                     ),
                   ),
                   const SizedBox(height: 44),
