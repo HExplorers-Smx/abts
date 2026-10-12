@@ -147,6 +147,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: 调试 inputs（临时）
+        if: always()
+        run: echo "inputs=${{ toJson(inputs) }}"
+
       - name: 发布 GitHub Release
         if: ${{ inputs.release == 'true' }}
         env:
