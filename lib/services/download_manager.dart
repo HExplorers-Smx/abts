@@ -242,6 +242,39 @@ class DownloadManager extends ChangeNotifier {
     _pump();
   }
 
+  /// 暂停某本书的全部进行中任务
+  void pauseBook(String bvid) {
+    var changed = false;
+    for (final t in _store.tasksForBook(bvid)) {
+      if (!t.active) continue;
+      _tokens.remove(t.key)?.cancel();
+      _setStatus(t, DownloadStatus.paused);
+      _speed.remove(t.key);
+      _removeFromQueue(t.key);
+      changed = true;
+    }
+    if (changed) {
+      notifyListeners();
+      _pump();
+    }
+  }
+
+  /// 恢复某本书的暂停/失败任务
+  void resumeBook(String bvid) {
+    var changed = false;
+    for (final t in _store.tasksForBook(bvid)) {
+      if (t.completed || t.active) continue;
+      _setStatus(t, DownloadStatus.queued);
+      t.error = null;
+      _enqueueKey(t.key);
+      changed = true;
+    }
+    if (changed) {
+      notifyListeners();
+      _pump();
+    }
+  }
+
   /// 删除单个任务（含本地文件）
   Future<void> delete(String bvid, int cid) async {
     final task = _store.taskFor(bvid, cid);

@@ -19,6 +19,15 @@ class Chapter {
         duration: int.tryParse('${m['duration'] ?? 0}') ?? 0,
       );
 
+  Map<String, dynamic> toJson() => {
+        'cid': cid,
+        'page': page,
+        'part': part,
+        'duration': duration,
+      };
+
+  factory Chapter.fromJson(Map<String, dynamic> m) => Chapter.fromMap(m);
+
   String get durationText {
     if (duration <= 0) return '';
     final h = duration ~/ 3600;

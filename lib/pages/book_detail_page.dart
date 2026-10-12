@@ -9,6 +9,7 @@ import '../models/chapter.dart';
 import '../models/download_task.dart';
 import '../player/book_player.dart';
 import '../services/bili_api.dart';
+import '../services/book_cache.dart';
 import '../services/download_manager.dart';
 import '../services/umeng_analytics.dart';
 import '../utils/format.dart';
@@ -45,8 +46,21 @@ class _BookDetailPageState extends State<BookDetailPage> {
       _loading = true;
       _error = null;
     });
+    // 先读本地缓存：下载过的书秒开，无网也能进详情继续收听
+    Book? cached;
+    try {
+      cached = await BookCache.load(widget.bvid);
+    } catch (_) {}
+    if (cached != null && mounted) {
+      setState(() {
+        _book = cached;
+        _loading = false;
+      });
+    }
     try {
       final book = await _bili.detail(widget.bvid);
+      // 网络成功则更新缓存，供下次离线使用
+      await BookCache.save(book);
       if (!mounted) return;
       setState(() {
         _book = book;
@@ -54,10 +68,13 @@ class _BookDetailPageState extends State<BookDetailPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = e is BiliApiException ? e.message : '加载失败，请稍后重试';
-      });
+      // 有缓存时保持缓存内容展示；无缓存才报错
+      if (cached == null) {
+        setState(() {
+          _loading = false;
+          _error = e is BiliApiException ? e.message : '加载失败，请稍后重试';
+        });
+      }
     }
   }
 

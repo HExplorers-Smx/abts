@@ -138,19 +138,27 @@ class Book {
         'authorFace': authorFace,
         'desc': desc,
         'play': play,
+        if (chapters != null)
+          'chapters': chapters!.map((c) => c.toJson()).toList(),
       };
 
-  factory Book.fromJson(Map<String, dynamic> m) => Book(
-        bvid: m['bvid'] as String? ?? '',
-        aid: int.tryParse('${m['aid'] ?? 0}') ?? 0,
-        title: m['title'] as String? ?? '',
-        pic: normalizePic(m['pic'] as String? ?? ''),
-        pages: int.tryParse('${m['pages'] ?? 1}') ?? 1,
-        duration: int.tryParse('${m['duration'] ?? 0}') ?? 0,
-        author: m['author'] as String? ?? '',
-        mid: int.tryParse('${m['mid'] ?? 0}') ?? 0,
-        authorFace: m['authorFace'] as String? ?? '',
-        desc: m['desc'] as String? ?? '',
-        play: int.tryParse('${m['play'] ?? 0}') ?? 0,
-      );
+  factory Book.fromJson(Map<String, dynamic> m) {
+    final rawChapters = m['chapters'] as List?;
+    return Book(
+      bvid: m['bvid'] as String? ?? '',
+      aid: int.tryParse('${m['aid'] ?? 0}') ?? 0,
+      title: m['title'] as String? ?? '',
+      pic: normalizePic(m['pic'] as String? ?? ''),
+      pages: int.tryParse('${m['pages'] ?? 1}') ?? 1,
+      duration: int.tryParse('${m['duration'] ?? 0}') ?? 0,
+      author: m['author'] as String? ?? '',
+      mid: int.tryParse('${m['mid'] ?? 0}') ?? 0,
+      authorFace: m['authorFace'] as String? ?? '',
+      desc: m['desc'] as String? ?? '',
+      play: int.tryParse('${m['play'] ?? 0}') ?? 0,
+      chapters: rawChapters?.map(
+              (e) => Chapter.fromJson((e as Map).cast<String, dynamic>()))
+          .toList(),
+    );
+  }
 }
