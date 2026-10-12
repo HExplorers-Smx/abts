@@ -5,6 +5,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' hide AudioTrack;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/network/api_config.dart';
 import '../core/storage/shelf_store.dart';
@@ -44,6 +45,12 @@ class BookPlayer extends ChangeNotifier {
   Timer? _sleepTimer;
   Duration _sleepRemaining = Duration.zero;
 
+  /// 播放倍速（0.5x ~ 3.0x，持久化）
+  double _rate = 1.0;
+
+  /// 播完当前章后自动停止（睡眠定时的一种，与倒计时互不影响）
+  bool _stopAtChapterEnd = false;
+
   /// 播放位置（高频，独立于 notifyListeners，避免整页频繁重建）
   final ValueNotifier<Duration> positionTick = ValueNotifier(Duration.zero);
 
@@ -65,6 +72,8 @@ class BookPlayer extends ChangeNotifier {
   String? get playbackUrl => _playbackUrl;
   BookAudio? get lastAudio => _lastAudio;
   Duration get sleepRemaining => _sleepRemaining;
+  double get rate => _rate;
+  bool get stopAtChapterEnd => _stopAtChapterEnd;
 
   Chapter? get currentChapter =>
       _chapters.isNotEmpty && _index < _chapters.length
@@ -83,6 +92,16 @@ class BookPlayer extends ChangeNotifier {
   void setup() {
     if (_ready) return;
     _ready = true;
+    // 恢复上次的播放倍速
+    SharedPreferences.getInstance().then((prefs) {
+      final r = prefs.getDouble('abts_rate');
+      if (r != null && r > 0 && r != _rate) {
+        _rate = r.clamp(0.5, 3.0);
+        try {
+          _player.setRate(_rate);
+        } catch (_) {}
+      }
+    });
     _player.stream.completed.listen((_) async {
       // media_kit 在 open() 换源时可能抛出一次伪 completed，
       // 用「加载中」与「位置未到结尾」两道判断过滤，避免乱跳章节
@@ -93,6 +112,14 @@ class BookPlayer extends ChangeNotifier {
         return;
       }
       flushProgress();
+      // 睡眠定时「播完本章停」：本章结束后暂停，不自动切下一章
+      if (_stopAtChapterEnd) {
+        _stopAtChapterEnd = false;
+        cancelSleepTimer();
+        await pause();
+        notifyListeners();
+        return;
+      }
       if (hasNext) {
         await next();
       } else {
@@ -294,6 +321,11 @@ class BookPlayer extends ChangeNotifier {
           await _player.open(
               isLocal ? Media(url) : Media(url, httpHeaders: _streamHeaders()),
               play: resumeMs <= 0);
+          if (_rate != 1.0) {
+            try {
+              await _player.setRate(_rate);
+            } catch (_) {}
+          }
           if (resumeMs > 0) {
             await _seekToResume(resumeMs);
           }
@@ -620,7 +652,23 @@ class BookPlayer extends ChangeNotifier {
     _saveNow();
   }
 
+  // ---------- 播放倍速 ----------
+  Future<void> setRate(double r) async {
+    _rate = r.clamp(0.5, 3.0);
+    try {
+      await _player.setRate(_rate);
+    } catch (_) {}
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('abts_rate', _rate);
+  }
+
   // ---------- 睡眠定时 ----------
+  void setStopAtChapterEnd(bool v) {
+    _stopAtChapterEnd = v;
+    notifyListeners();
+  }
+
   void setSleepTimer(Duration d) {
     _sleepTimer?.cancel();
     _sleepRemaining = d;

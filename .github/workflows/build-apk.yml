@@ -34,9 +34,14 @@ on:
         required: true
         type: boolean
         default: false
+      release:
+        description: '构建完成后自动发布 GitHub Release（tag 取 pubspec 版本号，如 v0.2.3）'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-apk-${{ github.ref }}
@@ -142,6 +147,27 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: 发布 GitHub Release
+        if: ${{ inputs.release == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "==> Release $TAG 已存在，上传/覆盖资产"
+            gh release upload "$TAG" dist/*.apk --clobber
+          else
+            echo "==> 创建 Release $TAG"
+            gh release create "$TAG" dist/*.apk \
+              --title "v${VERSION}" \
+              --notes "由「构建 APK（可选架构）」工作流自动发布。
+
+勾选 release 后构建，本 Release 会自动创建；App 内「检查更新」会检测到该版本。"
+          fi
+          echo "已发布：https://github.com/HExplorers-Smx/abts/releases/tag/$TAG"
+
       - name: 汇总构建信息
         run: |
           echo "## 构建完成 ✅" >> $GITHUB_STEP_SUMMARY
@@ -150,3 +176,6 @@ jobs:
           echo "- 构建类型：\`${{ inputs.build_type }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- 已打包：\`$(ls dist | tr '\n' ' ')\`" >> $GITHUB_STEP_SUMMARY
           echo "- 下载：本页底部 **Artifacts** 区点击 \`abts-apk-${{ inputs.build_type }}\` 下载" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.release }}" = "true" ]; then
+            echo "- 已发布 Release：https://github.com/HExplorers-Smx/abts/releases/tag/v$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)" >> $GITHUB_STEP_SUMMARY
+          fi

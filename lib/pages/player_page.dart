@@ -435,6 +435,16 @@ class _PlayerPageState extends State<PlayerPage> {
           ),
           const SizedBox(width: 10),
           ActionChip(
+            avatar:  Icon(Icons.speed_rounded,
+                size: 16, color: AppTheme.accent),
+            label: Text(
+              player.rate == 1.0 ? '倍速' : '${player.rate}x',
+              style: const TextStyle(fontSize: 12),
+            ),
+            onPressed: () => _showRateSheet(player),
+          ),
+          const SizedBox(width: 10),
+          ActionChip(
             avatar:  Icon(Icons.bedtime_outlined,
                 size: 16, color: AppTheme.accent),
             label: Text(
@@ -453,6 +463,47 @@ class _PlayerPageState extends State<PlayerPage> {
             onPressed: () => _share(player),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showRateSheet(BookPlayer player) {
+    const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+             Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                '播放倍速',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textMain),
+              ),
+            ),
+            ...rates.map((r) {
+              final active = (player.rate - r).abs() < 0.001;
+              return ListTile(
+                title: Text('${r}x',
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: active ? AppTheme.accent : AppTheme.textMain)),
+                trailing: active
+                    ?  Icon(Icons.check, color: AppTheme.accent)
+                    : null,
+                onTap: () {
+                  player.setRate(r);
+                  Navigator.of(ctx).pop();
+                },
+              );
+            }),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -483,6 +534,24 @@ class _PlayerPageState extends State<PlayerPage> {
                       color: AppTheme.textMain),
                 ),
               ),
+              ListTile(
+                title: Text('播完当前章自动停止',
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: player.stopAtChapterEnd
+                            ? AppTheme.accent
+                            : AppTheme.textMain)),
+                subtitle: Text('适合听书入睡：本章结束后暂停，不自动切下一章',
+                    style: TextStyle(fontSize: 11, color: AppTheme.textHint)),
+                trailing: player.stopAtChapterEnd
+                    ?  Icon(Icons.check, color: AppTheme.accent)
+                    : null,
+                onTap: () {
+                  player.setStopAtChapterEnd(!player.stopAtChapterEnd);
+                  Navigator.of(ctx).pop();
+                },
+              ),
+              const Divider(height: 1),
               ...options.map((o) {
                 final active = (player.sleepRemaining > Duration.zero &&
                     (o.$1 > Duration.zero && player.sleepRemaining <= o.$1 + const Duration(minutes: 1))) ||

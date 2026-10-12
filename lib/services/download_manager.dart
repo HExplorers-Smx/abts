@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/network/api_config.dart';
 import '../models/audio_stream.dart';
@@ -53,8 +55,18 @@ class DownloadManager extends ChangeNotifier {
   final Map<String, _SpeedSample> _speed = {};
   int _active = 0;
 
+  /// 仅 Wi-Fi 下载开关（持久化）：开启后蜂窝网下不启动新任务，等 Wi-Fi 自动继续
+  bool _wifiOnly = false;
+  /// 当前网络是否为 Wi-Fi（无法探测时视为可下载，不误伤）
+  bool _onWifi = true;
+  /// 因「仅 Wi-Fi」被暂时拦下的任务数（用于 UI 提示）
+  int _wifiBlocked = 0;
+
   DownloadStore get store => _store;
   bool get ready => _ready;
+  bool get wifiOnly => _wifiOnly;
+  bool get onWifi => _onWifi;
+  int get wifiBlocked => _wifiBlocked;
 
   Directory? get downloadDir => _dir;
 
@@ -93,6 +105,7 @@ class DownloadManager extends ChangeNotifier {
       notifyListeners();
       _pump();
     }
+    _initWifiOnly();
   }
 
   void _setupDio() {
@@ -366,6 +379,65 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  // ---------- 仅 Wi-Fi 下载 ----------
+  Future<void> _initWifiOnly() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _wifiOnly = prefs.getBool('abts_wifi_only_download') ?? false;
+      // 初次探测 + 监听网络变化：恢复 Wi-Fi 时自动补跑被拦下的任务
+      await _refreshWifi();
+      Connectivity().onConnectivityChanged.listen((results) {
+        _applyConnectivity(results);
+      });
+    } catch (e) {
+      debugPrint('[DownloadManager] wifi-only init failed: $e');
+    }
+    notifyListeners();
+  }
+
+  Future<void> _refreshWifi() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      _applyConnectivity(results);
+    } catch (e) {
+      debugPrint('[DownloadManager] connectivity check failed: $e');
+      _onWifi = true; // 探测失败不拦截，避免误伤
+    }
+  }
+
+  void _applyConnectivity(List<ConnectivityResult> results) {
+    if (results.isEmpty) {
+      _onWifi = false; // 无网络
+    } else {
+      _onWifi = results.any((r) =>
+          r == ConnectivityResult.wifi ||
+          r == ConnectivityResult.ethernet ||
+          r == ConnectivityResult.vpn);
+    }
+    _wifiBlocked = _wifiOnly && !_onWifi
+        ? _store.tasks.where((t) => !t.completed && !t.active).length
+        : 0;
+    notifyListeners();
+    if (_wifiOnly && _onWifi) {
+      _pump(); // Wi-Fi 恢复，自动开始被拦下的任务
+    }
+  }
+
+  /// 切换「仅 Wi-Fi 下载」（持久化）
+  Future<void> setWifiOnly(bool v) async {
+    if (_wifiOnly == v) return;
+    _wifiOnly = v;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('abts_wifi_only_download', _wifiOnly);
+    } catch (_) {}
+    await _refreshWifi();
+    if (!_wifiOnly) {
+      _pump(); // 关闭后立即放行排队任务
+    }
+  }
+
   // ---------- 队列调度 ----------
 
   void _enqueueKey(String key) {
@@ -379,6 +451,8 @@ class DownloadManager extends ChangeNotifier {
   }
 
   void _pump() {
+    // 仅 Wi-Fi 模式下，非 Wi-Fi 时暂停调度（任务保持在队列，等 Wi-Fi 恢复自动开始）
+    if (_wifiOnly && !_onWifi) return;
     while (_active < _maxConcurrent && _queue.isNotEmpty) {
       final key = _queue.removeAt(0);
       if (_running.containsKey(key)) continue;

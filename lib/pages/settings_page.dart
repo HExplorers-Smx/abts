@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/download_manager.dart';
+
 import '../core/theme/app_theme.dart';
 import '../services/auth_store.dart';
 import '../services/device_service.dart';
@@ -112,6 +114,26 @@ class _SettingsPageState extends State<SettingsPage> {
                       ? '已豁免电池优化，退到后台更不易被系统清理'
                       : '未开启，长时间后台播放可能被系统中断',
               style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+          ),
+          _sectionTitle('下载与存储'),
+          Consumer<DownloadManager>(
+            builder: (context, mgr, _) => SwitchListTile(
+              value: mgr.wifiOnly,
+              onChanged: (v) => mgr.setWifiOnly(v),
+              activeThumbColor: AppTheme.accent,
+              secondary: Icon(Icons.wifi_rounded, color: AppTheme.accent),
+              title: Text(
+                '仅 Wi-Fi 下载',
+                style: TextStyle(fontSize: 14, color: AppTheme.textMain),
+              ),
+              subtitle: Text(
+                mgr.wifiOnly
+                    ? '开启后仅在 Wi-Fi 下开始/继续下载，避免消耗流量；'
+                        '非 Wi-Fi 的任务会自动排队，连上 Wi-Fi 后继续'
+                    : '关闭后可在移动网络下直接下载（注意流量）',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+              ),
             ),
           ),
           Padding(

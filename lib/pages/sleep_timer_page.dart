@@ -51,6 +51,39 @@ class SleepTimerPage extends StatelessWidget {
                 ),
               ),
             ),
+          ListTile(
+            leading: Icon(Icons.stop_circle_outlined,
+                size: 20, color: AppTheme.accent),
+            title: Text('播完当前章自动停止',
+                style: TextStyle(
+                    fontSize: 14,
+                    color: player.stopAtChapterEnd
+                        ? AppTheme.accent
+                        : AppTheme.textMain)),
+            subtitle: Text('本章结束后自动暂停，不切下一章；适合听着入睡',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSub)),
+            trailing: player.stopAtChapterEnd
+                ? Icon(Icons.check, color: AppTheme.accent)
+                : Icon(Icons.stop_circle_outlined,
+                    size: 20, color: AppTheme.textSub),
+            onTap: () {
+              if (!player.loaded) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('先开始听一本书再设定吧')),
+                );
+                return;
+              }
+              player.setStopAtChapterEnd(!player.stopAtChapterEnd);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(player.stopAtChapterEnd
+                      ? '已开启：播完当前章自动停止'
+                      : '已关闭播完本章停止'),
+                ),
+              );
+            },
+          ),
+          const Divider(height: 1),
           for (final (d, label) in _options)
             ListTile(
               title: Text(label,
