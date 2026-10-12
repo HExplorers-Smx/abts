@@ -147,16 +147,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: 调试 inputs（临时）
-        if: always()
-        run: echo "inputs=${{ toJson(inputs) }}"
-
       - name: 发布 GitHub Release
-        if: ${{ inputs.release == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+          if [ "${{ inputs.release }}" != "true" ]; then
+            echo "未勾选 release 选项，跳过发布"
+            exit 0
+          fi
           VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
           TAG="v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
