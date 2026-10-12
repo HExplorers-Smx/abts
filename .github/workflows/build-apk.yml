@@ -162,9 +162,7 @@ jobs:
             echo "==> 创建 Release $TAG"
             gh release create "$TAG" dist/*.apk \
               --title "v${VERSION}" \
-              --notes "由「构建 APK（可选架构）」工作流自动发布。
-
-勾选 release 后构建，本 Release 会自动创建；App 内「检查更新」会检测到该版本。"
+              --notes "由「构建 APK（可选架构）」工作流自动发布。勾选 release 后构建，App 内「检查更新」会检测到该版本。"
           fi
           echo "已发布：https://github.com/HExplorers-Smx/abts/releases/tag/$TAG"
 
