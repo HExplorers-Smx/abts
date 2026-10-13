@@ -171,6 +171,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 ? LyricsCadenzaView(
                     key: const ValueKey('lyrics'),
                     player: player,
+                    coverUrl: book.pic,
                     onToggleCover: () =>
                         setState(() => _showLyrics = false),
                   )

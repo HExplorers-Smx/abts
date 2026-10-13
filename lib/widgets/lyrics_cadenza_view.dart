@@ -13,21 +13,25 @@ import '../services/bili_api.dart';
 import '../services/download_store.dart';
 import '../services/lyrics_parser.dart';
 
-/// folia-major「Cadenza 华彩」散落歌词视图的 Flutter 移植。
+/// folia-major「Cadenza 华彩」散落式歌词视图的 Flutter 移植。
 ///
 /// 核心视觉（对应 folia cadenzaPlacements / cadenzaEnvelopes）：
-/// - 同时显示前 1 句 + 当前句 + 后 1 句，每句按标点/空格切分意群（chunk）；
-/// - 当前句的「强调词」（hero，靠近句中央的意群）放大居中，逐字点亮 + 辉光；
-/// - 其余意群围绕 hero 错落分布（螺旋搜索避让碰撞，少量旋转），
-///   整屏铺满（「各自打乱、全身显示」）；
-/// - 唱过的句子向外漂移 + 旋转 + 变暗（getClassicPassedDrift：5s easeInOut）；
-/// - 逐字时间仍按句均分 + 标点停顿加权（句级数据源下的最优近似）；
-/// - 点击歌词跳转播放、点空白切回封面、长按调全局偏移。
+/// - 同时显示前 1 句 + 当前句 + 后 1 句，每句按标点/空格切意群（chunk）；
+/// - 每个意群按「行带 + 种子随机」散布到整屏（不同位置、大小、旋转），
+///   当前句的「强调意群」（hero）放大居中，其余围绕避让；
+/// - 当前句逐字点亮 + 辉光（getClassicCharGlow）；唱过意群 5s 缓动外漂旋转淡出；
+/// - 点击任意意群跳转该句，点空白切回封面，长按调全局偏移。
 class LyricsCadenzaView extends StatefulWidget {
-  const LyricsCadenzaView({super.key, required this.player, this.onToggleCover});
+  const LyricsCadenzaView({
+    super.key,
+    required this.player,
+    this.onToggleCover,
+    this.coverUrl,
+  });
 
   final BookPlayer player;
   final VoidCallback? onToggleCover;
+  final String? coverUrl;
 
   @override
   State<LyricsCadenzaView> createState() => _LyricsCadenzaViewState();
@@ -44,7 +48,7 @@ class _Placement {
   final double x; // 相对屏幕中心
   final double y;
   final double scale;
-  final double rotate; // 等待态旋转
+  final double rotate; // 基础旋转
   final double passedRotate; // 唱过后额外旋转
   final double driftX; // 唱过漂移方向（单位向量）
   final double driftY;
@@ -71,8 +75,8 @@ class _Placement {
 class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     with SingleTickerProviderStateMixin {
   static const double _fontSize = 21;
-  static const double _heroScale = 1.34;
-  static const double _lineHeight = 1.35;
+  static const double _heroScale = 1.32;
+  static const double _lineHeight = 1.3;
 
   // ---------- 时间驱动 ----------
   late final Ticker _ticker;
@@ -234,7 +238,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     return ans;
   }
 
-  /// 按标点/空格切意群；单意群超过 12 字折半，避免超大块
+  /// 按标点/空格切意群；长意群从中部均衡切开（避免 12+1 的怪切法）
   List<String> _splitChunks(String text) {
     final parts = text
         .split(RegExp(r'[，。！？；：、,.!?;:…—～\s]+'))
@@ -243,23 +247,14 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     if (parts.isEmpty) return [text];
     final chunks = <String>[];
     for (var p in parts) {
-      while (p.length > 12) {
-        chunks.add(p.substring(0, 12));
-        p = p.substring(12);
+      while (p.length > 11) {
+        final cut = p.length > 15 ? 8 : p.length ~/ 2;
+        chunks.add(p.substring(0, cut));
+        p = p.substring(cut);
       }
       if (p.isNotEmpty) chunks.add(p);
     }
     return chunks;
-  }
-
-  double _measureWidth(String text) {
-    return _widthCache.putIfAbsent(text, () {
-      final tp = TextPainter(
-        text: TextSpan(text: text, style: _textStyle()),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      return tp.width;
-    });
   }
 
   TextStyle _textStyle({bool bold = false}) => TextStyle(
@@ -268,6 +263,17 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
         fontWeight: bold ? FontWeight.w600 : FontWeight.w500,
         color: AppTheme.textMain,
       );
+
+  double _measureWidth(String text) {
+    return _widthCache.putIfAbsent(text, () {
+      final tp = TextPainter(
+        // 统一按粗体测量，保证渲染不会超出容器
+        text: TextSpan(text: text, style: _textStyle(bold: true)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      return tp.width;
+    });
+  }
 
   Color get _baseColor => AppTheme.textMain.withValues(alpha: 0.4);
   Color get _brightColor => AppTheme.textMain;
@@ -281,7 +287,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
 
   double _smoothstep(double x) => x * x * (3 - 2 * x);
 
-  // ---------- 布局（folia cadenzaPlacements 移植） ----------
+  // ---------- 布局（folia cadenzaPlacements 移植 + 全屏散布） ----------
   List<_Placement> _buildPlacements(
       List<LyricLine> lines, int active, double w, double h) {
     final placements = <_Placement>[];
@@ -311,19 +317,17 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       lineChunks.add(_splitChunks(lines[i].text));
     }
 
-    // hero = 当前句的中间意群（folia 强调词：居中偏后，放大突出）
+    // hero = 当前句的中间意群（放大突出）
     final heroText = lineChunks.length > 1 && lineChunks[1].isNotEmpty
         ? lineChunks[1][lineChunks[1].length ~/ 2]
         : null;
-    // hero 相关几何（供第二阶段避让使用）
-    var heroW = 0.0, heroH = 0.0, heroStart = 0.0, heroEnd = 0.0;
+    var heroStart = 0.0, heroEnd = 0.0;
 
-    // 逐句布局
     final centerX = w / 2, centerY = h / 2;
-    final maxR = math.max(h * 0.5, 120).toDouble();
+    final maxR = math.max(h * 0.55, 130).toDouble();
     final step = math.max(10, _fontSize * 0.14).round();
 
-    // 第一遍：先放置 hero（居中），让其余意群围绕它避让
+    // 第一遍：hero 居中占位
     for (var wi = 0; wi < lineChunks.length; wi++) {
       final li = math.max(0, active - 1) + wi;
       final status = li < active ? -1 : (li > active ? 1 : 0);
@@ -333,11 +337,8 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       final totalChars = chunks.fold<int>(0, (a, c) => a + c.length);
       for (var ci = 0; ci < chunks.length; ci++) {
         if (status != 0 || chunks[ci] != heroText) continue;
-        final text = chunks[ci];
-        final cw = _measureWidth(text);
-        final chH = _fontSize * 1.35;
-        heroW = cw * _heroScale;
-        heroH = chH * _heroScale;
+        final cw = _measureWidth(chunks[ci]);
+        final chH = _fontSize * _lineHeight;
         final chunkStart = line.start +
             line.duration *
                 (ci == 0
@@ -345,45 +346,54 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
                     : chunks.take(ci).fold<int>(0, (a, c) => a + c.length)) /
                 totalChars;
         heroStart = chunkStart;
-        heroEnd = chunkStart + line.duration * text.length / totalChars;
-        occupy(centerX, centerY, heroW, heroH, 14);
+        heroEnd = chunkStart + line.duration * chunks[ci].length / totalChars;
+        occupy(centerX, centerY, cw * _heroScale, chH * _heroScale, 14);
         break;
       }
     }
 
+    // 第二遍：其余意群按「行带 + 种子」散布，围绕 hero 螺旋避让
     for (var wi = 0; wi < lineChunks.length; wi++) {
       final li = math.max(0, active - 1) + wi;
       final line = lines[li];
-      final status = li < active ? -1 : (li > active ? 1 : 0); // passed/active/waiting
+      final status = li < active ? -1 : (li > active ? 1 : 0);
       final chunks = lineChunks[wi];
       if (chunks.isEmpty) continue;
-
-      // 该句总宽（居中基准）
-      final totalW = chunks.fold<double>(0, (a, c) => a + _measureWidth(c));
       final totalChars = chunks.fold<int>(0, (a, c) => a + c.length);
-      final gap = _fontSize * 0.32;
-      // 基准行位置：前句上方、当前句中央、后句下方
-      final baseY = status == 0 ? 0.0 : (status < 0 ? -h * 0.31 : h * 0.31);
-      final baseX = 0.0;
 
-      var cursorX = -totalW / 2;
+      // 行带：前句上带、当前句中央带、后句下带
+      final band = status < 0
+          ? (-0.52 * h, -0.17 * h)
+          : status > 0
+              ? (0.17 * h, 0.52 * h)
+              : (-0.15 * h, 0.15 * h);
+
       for (var ci = 0; ci < chunks.length; ci++) {
         final text = chunks[ci];
         final cw = _measureWidth(text);
-        final cx0 = cursorX + cw / 2;
-        cursorX += cw + gap;
-        final chH = _fontSize * 1.35;
+        final chH = _fontSize * _lineHeight;
         final isHero = status == 0 && text == heroText;
-        final scale = isHero ? _heroScale : (status == 0 ? 1.0 : 0.86);
+        final seed = li * 31 + ci * 13 + 7;
+        double rand(double o) {
+          final x = math.sin(seed + o) * 10000;
+          return x - x.floorToDouble();
+        }
+
+        final scale = isHero
+            ? _heroScale
+            : status == 0
+                ? 0.95 + rand(7) * 0.18
+                : 0.8 + rand(8) * 0.12;
         final cwScaled = cw * scale, chScaled = chH * scale;
-        final chunkStart = line.start + line.duration *
-            (ci == 0 ? 0 : chunks.take(ci).fold<int>(0, (a, c) => a + c.length)) /
-            totalChars;
-        final chunkEnd = chunkStart +
-            line.duration * text.length / totalChars;
+        final chunkStart = line.start +
+            line.duration *
+                (ci == 0
+                    ? 0
+                    : chunks.take(ci).fold<int>(0, (a, c) => a + c.length)) /
+                totalChars;
+        final chunkEnd = chunkStart + line.duration * text.length / totalChars;
 
         if (isHero) {
-          // 位置与占位已在第一遍完成，这里仅产出 hero 落点
           placements.add(_Placement(
             text: text,
             lineIndex: li,
@@ -403,25 +413,22 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           continue;
         }
 
-        final seed = li * 31 + ci * 13;
-        double rand(double o) {
-          final x = math.sin(seed + o) * 10000;
-          return x - x.floorToDouble();
-        }
-        // 初始位置：该句基准行 + 句内水平位置
-        double px = baseX + cx0, py = baseY;
+        // 目标点：行带内全宽散布 + 种子扰动
+        final tx = (rand(5) - 0.5) * w * 0.74;
+        final ty = band.$1 + rand(6) * (band.$2 - band.$1);
+        var px = tx, py = ty;
+
         // 与 hero 的避让推挤（围绕感）
-        final heroDx = px, heroDy = py;
-        final heroDist = math.sqrt(heroDx * heroDx + heroDy * heroDy);
-        final minSep = _fontSize * _heroScale * 2.4 + cwScaled * 0.5;
-        if (heroText != null && heroDist < minSep && heroDist > 0.01) {
-          px += heroDx / heroDist * (minSep - heroDist);
-          py += heroDy / heroDist * (minSep - heroDist) * 0.9;
+        final hd = math.sqrt(px * px + py * py);
+        final minSep = _fontSize * _heroScale * 2.2 + cwScaled * 0.5;
+        if (heroText != null && hd < minSep && hd > 0.01) {
+          px += px / hd * (minSep - hd);
+          py += py / hd * (minSep - hd) * 0.9;
         }
-        // 螺旋搜索避让碰撞（folia：记录最佳兜底 = 边界内且位移最小）
+
+        // 螺旋搜索避让碰撞；兜底 = 边界内位移最小
         final baseAngle = math.atan2(py, px + cwScaled / 2);
         var chosenX = px, chosenY = py, found = false;
-        // 兜底初值：首选点 clamp 进边界，保证极端拥挤时也不越界
         var fallbackX = px
             .clamp(-w / 2 + cwScaled / 2 + w * 0.06, w / 2 - cwScaled / 2 - w * 0.06)
             .toDouble();
@@ -445,7 +452,6 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             }
             final travel = math.sqrt(rx * rx + ry * ry);
             if (collides(l, t, r, b)) {
-              // 有碰撞也记录兜底：重叠面积 + 位移 越小越好
               var overlap = 0.0;
               for (final o in occupied) {
                 final ow = math.max(0, math.min(r, o.r) - math.max(l, o.l));
@@ -487,7 +493,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           x: chosenX,
           y: chosenY,
           scale: scale,
-          rotate: (rand(3) - 0.5) * 6,
+          rotate: (rand(3) - 0.5) * 8,
           passedRotate: (rand(4) - 0.5) * 14,
           driftX: outX / len,
           driftY: outY / len * 0.72,
@@ -531,9 +537,10 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           onTap: widget.onToggleCover,
           onLongPress: _showOffsetAdjuster,
           child: Stack(
+            clipBehavior: Clip.none,
+            fit: StackFit.expand,
             children: [
-              // 氛围光晕
-              _ambientGlow(w, h),
+              _backdrop(w, h),
               for (final p in _placements) _buildChunk(p, lines, active, w, h),
             ],
           ),
@@ -542,7 +549,9 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     );
   }
 
-  Widget _ambientGlow(double w, double h) {
+  /// 背景：封面模糊底 + 氛围光晕
+  Widget _backdrop(double w, double h) {
+    final url = widget.coverUrl;
     return IgnorePointer(
       child: Container(
         width: w,
@@ -550,13 +559,31 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
         decoration: BoxDecoration(
           gradient: RadialGradient(
             center: const Alignment(0, 0),
-            radius: 0.9,
+            radius: 0.95,
             colors: [
-              _glowAccent.withValues(alpha: 0.07),
+              _glowAccent.withValues(alpha: 0.09),
+              _glowAccent.withValues(alpha: 0.03),
               Colors.transparent,
             ],
           ),
         ),
+        child: url == null || url.isEmpty
+            ? null
+            : ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.network(
+                      url,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      cacheWidth: 480,
+                    ),
+                    Container(color: Colors.black.withValues(alpha: 0.62)),
+                  ],
+                ),
+              ),
       ),
     );
   }
@@ -575,27 +602,27 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
 
     Widget child;
     if (isActiveLine) {
-      // 当前句所有意群都逐字点亮；hero 由更大的字号承担强调
       child = _activeChunk(p, t);
     } else {
-      // 唱过：变暗 + 漂移；等待：暗色错落
       final baseAlpha = p.lineIndex < active
-          ? (0.42 * (1 - drift * 0.55)).clamp(0.15, 0.42).toDouble()
-          : 0.5;
+          ? (0.5 * (1 - drift * 0.55)).clamp(0.18, 0.5).toDouble()
+          : 0.55;
       child = Text(
         p.text,
+        softWrap: false,
+        overflow: TextOverflow.visible,
         style: _textStyle().copyWith(
           color: _baseColor.withValues(alpha: baseAlpha),
           fontSize: _fontSize * p.scale,
+          fontWeight: p.hero ? FontWeight.w700 : FontWeight.w500,
         ),
       );
     }
 
+    // 不定宽高（不裁剪），left/top 定位
     return Positioned(
       left: w / 2 + dx - p.width / 2,
       top: h / 2 + dy - p.height / 2,
-      width: p.width,
-      height: p.height,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => _seekToLine(p.lineIndex, lines),
@@ -618,11 +645,13 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     for (var i = 0; i < n; i++) {
       final s = p.start + charDur * i;
       final e = i == n - 1 ? p.end : p.start + charDur * (i + 1);
-      // 辉光：6×charDur 起峰（smoothstep），词结束后 0.9s 淡出
       final glow = _charGlow(t, s, e);
-      final status =
-          (t < s ? 0 : (t < e ? (t - s) / math.max(0.001, e - s) : 1))
-              .toDouble();
+      final status = (t < s
+              ? 0.0
+              : t < e
+                  ? (t - s) / math.max(0.001, e - s)
+                  : 1.0)
+          .toDouble();
       final color = status >= 1
           ? _sungColor
           : status > 0
@@ -633,7 +662,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
         style: TextStyle(
           fontSize: fs,
           height: _lineHeight,
-          fontWeight: FontWeight.w600,
+          fontWeight: p.hero ? FontWeight.w700 : FontWeight.w600,
           color: color,
           shadows: glow > 0.02
               ? [
@@ -655,6 +684,8 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     return Text.rich(
       TextSpan(children: spans),
       textAlign: TextAlign.center,
+      softWrap: false,
+      overflow: TextOverflow.visible,
       style: TextStyle(fontSize: fs, height: _lineHeight),
     );
   }
