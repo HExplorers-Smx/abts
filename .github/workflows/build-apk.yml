@@ -58,42 +58,21 @@ jobs:
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要完整历史来统计提交数作为单调递增的构建号
 
-      # push 触发时自动递增版本号（pubspec 语义号+构建号、AppMeta 同步），
-      # 提交回 main 后再用新版本号构建；commit 带 [skip ci] 防止再次触发本工作流。
-      # 效果：以后每次推送都会自动产出新版本号的 APK，无需手工刷。
-      - name: 自动递增版本号（仅 push 触发）
-        if: ${{ github.event_name == 'push' }}
+      # push 触发时动态计算构建版本号（语义号 + git 提交数），只覆盖本次构建，
+      # 不回写仓库、不产生额外 commit。每次推送构建号都递增，版本永不重复。
+      - name: 计算本次构建版本号
         run: |
           set -e
-          python3 - <<'PY'
-          import os, re
-          p = 'pubspec.yaml'
-          s = open(p, encoding='utf-8').read()
-          m = re.search(r'^version:\s*(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?', s, re.M)
-          if not m:
-              print('::warning::pubspec.yaml 未找到 version 字段，跳过自动递增')
-              raise SystemExit(0)
-          ma, mi, pa = m.group(1), m.group(2), m.group(3)
-          bld = int(m.group(4) or 0)
-          sem = f'{ma}.{mi}.{int(pa) + 1}'
-          ver = f'{sem}+{bld + 1}'
-          s2 = re.sub(r'^version:\s*\S+', f'version: {ver}', s, count=1, flags=re.M)
-          open(p, 'w', encoding='utf-8', newline='').write(s2)
-          a = 'lib/core/app_meta.dart'
-          t = open(a, encoding='utf-8').read()
-          t2 = re.sub(r"static const String version = '[^']*';",
-                      f"static const String version = '{sem}';", t, count=1)
-          open(a, 'w', encoding='utf-8', newline='').write(t2)
-          with open(os.environ['GITHUB_ENV'], 'a') as f:
-              f.write(f'NEW_VERSION={ver}\n')
-          print(f'版本号 {m.group(0).split()[-1]} → {ver}')
-          PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pubspec.yaml lib/core/app_meta.dart
-          git commit -m "chore: 自动递增版本号至 $NEW_VERSION [skip ci]" || echo "版本号无变化，跳过提交"
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          VER=$(grep -m1 '^version:' pubspec.yaml | tr -d '\r' | sed -E 's/^version:[[:space:]]*//' | cut -d+ -f1)
+          CNT=$(git rev-list --count HEAD)
+          BUILD_NAME="$VER.$CNT"
+          echo "BUILD_NAME=$BUILD_NAME" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$CNT" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$BUILD_NAME" >> "$GITHUB_ENV"
+          echo "本次构建版本：$BUILD_NAME (build $CNT)"
 
       # workflow_dispatch 的 inputs 只在手动触发时存在；push 触发时为空，
       # 这里统一解析：push 用默认参数（release + 主流两种架构，不自动发版），
@@ -170,12 +149,16 @@ jobs:
           if [ "$BUILD_TYPE" = "debug" ]; then MODE="--debug"; fi
           echo "==> flutter build apk --split-per-abi $MODE"
           flutter build apk --split-per-abi "$MODE" \
+            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
+            --dart-define=APP_VERSION="$APP_VERSION" \
             -Porg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m" \
             -Pkotlin.daemon.jvmargs="-Xmx2g" \
             -Porg.gradle.workers.max=2
           if [ "${{ steps.params.outputs.fat }}" = "true" ]; then
             echo "==> flutter build apk $MODE (fat)"
             flutter build apk "$MODE" \
+              --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
+              --dart-define=APP_VERSION="$APP_VERSION" \
               -Porg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m" \
               -Pkotlin.daemon.jvmargs="-Xmx2g" \
               -Porg.gradle.workers.max=2
