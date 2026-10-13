@@ -11,7 +11,7 @@ import '../models/chapter.dart';
 import '../player/book_player.dart';
 import '../utils/format.dart';
 import '../widgets/book_cover.dart';
-import '../widgets/lyrics_view.dart';
+import '../widgets/lyrics_cadenza_view.dart';
 
 /// 全屏播放页（PiliPlus 风格）
 class PlayerPage extends StatefulWidget {
@@ -168,7 +168,7 @@ class _PlayerPageState extends State<PlayerPage> {
               ),
             ),
             child: _showLyrics
-                ? LyricsView(
+                ? LyricsCadenzaView(
                     key: const ValueKey('lyrics'),
                     player: player,
                     onToggleCover: () =>
