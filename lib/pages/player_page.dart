@@ -9,7 +9,6 @@ import '../core/theme/app_theme.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
 import '../player/book_player.dart';
-import '../services/bookmark_store.dart';
 import '../utils/format.dart';
 import '../widgets/book_cover.dart';
 import '../widgets/lyrics_view.dart';
@@ -522,16 +521,6 @@ class _PlayerPageState extends State<PlayerPage> {
                 ),
                 const SizedBox(width: 10),
                 ActionChip(
-                  avatar:  Icon(Icons.bookmark_add_outlined,
-                      size: 16, color: AppTheme.accent),
-                  label: Text(
-                    '书签',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  onPressed: () => _showBookmarkSheet(player),
-                ),
-                const SizedBox(width: 10),
-                ActionChip(
                   avatar:  Icon(Icons.speed_rounded,
                       size: 16, color: AppTheme.accent),
                   label: Text(
@@ -557,73 +546,6 @@ class _PlayerPageState extends State<PlayerPage> {
           ),
         ),
       ),
-    );
-  }
-
-  /// 保存当前播放位置为书签（可写备注）
-  Future<void> _showBookmarkSheet(BookPlayer player) async {
-    final book = player.book;
-    final chapter = player.currentChapter;
-    if (book == null || chapter == null) return;
-    final pos = player.currentPosition;
-    final ctrl = TextEditingController();
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('添加书签'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              book.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textMain),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '{chapter.page} · {chapter.part} · {Fmt.duration(pos)}',
-              style: TextStyle(fontSize: 12, color: AppTheme.textSub),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              maxLength: 60,
-              decoration: const InputDecoration(
-                hintText: '备注（可选）',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    if (saved != true || !mounted) return;
-    await BookmarkStore.instance.add(Bookmark(
-      bvid: book.bvid,
-      title: book.title,
-      chapterIndex: player.index,
-      cid: chapter.cid,
-      chapterTitle: '{chapter.page} · {chapter.part}',
-      positionMs: pos.inMilliseconds,
-      note: ctrl.text.trim(),
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-    ));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已添加书签')),
     );
   }
 

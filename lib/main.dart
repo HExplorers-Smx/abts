@@ -15,7 +15,6 @@ import 'pages/home_shell.dart';
 import 'pages/splash_screen.dart';
 import 'player/bili_audio_handler.dart';
 import 'player/book_player.dart';
-import 'services/bookmark_store.dart';
 import 'services/auth_store.dart';
 import 'services/download_manager.dart';
 import 'services/umeng_analytics.dart';
@@ -136,7 +135,6 @@ class _AbTingShuAppState extends State<AbTingShuApp>
         ChangeNotifierProvider.value(value: LoginStore.instance),
         ChangeNotifierProvider.value(value: SearchHistoryStore.instance),
         ChangeNotifierProvider.value(value: DownloadManager.instance),
-        ChangeNotifierProvider.value(value: BookmarkStore.instance),
       ],
       child: AnimatedBuilder(
         animation: tc,

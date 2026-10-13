@@ -10,13 +10,11 @@ import '../models/download_task.dart';
 import '../player/book_player.dart';
 import '../services/app_update.dart';
 import '../services/auth_store.dart';
-import '../services/bookmark_store.dart';
 import '../services/download_manager.dart';
 import '../services/listening_stats.dart';
 import '../services/umeng_analytics.dart';
 import '../widgets/book_cover.dart';
 import 'about_page.dart';
-import 'bookmarks_page.dart';
 import 'downloads_page.dart';
 import 'favorites_page.dart';
 import 'player_page.dart';
@@ -34,7 +32,6 @@ class MyPage extends StatelessWidget {
     final shelf = context.watch<ShelfStore>();
     final player = context.watch<BookPlayer>();
     final auth = context.watch<LoginStore>();
-    final bookmarkCount = context.watch<BookmarkStore>().items.length;
     final books = shelf.books;
     final reading = books.where((b) => b.positionMs > 0).toList();
 
@@ -89,15 +86,6 @@ class MyPage extends StatelessWidget {
             subtitle:
                 reading.isEmpty ? '去发现找一本想听的书' : '共 ${reading.length} 本在听',
             onTap: () => _push(context, const RecentPage()),
-          ),
-          _menuTile(
-            context,
-            icon: Icons.bookmark_rounded,
-            color: AppTheme.toneViolet,
-            title: '书签',
-            subtitle:
-                bookmarkCount == 0 ? '收藏想重听的位置' : '共 $bookmarkCount 条',
-            onTap: () => _push(context, const BookmarksPage()),
           ),
           _menuTile(
             context,
