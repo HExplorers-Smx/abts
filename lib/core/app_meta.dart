@@ -3,5 +3,5 @@ class AppMeta {
   AppMeta._();
 
   static const String name = '阿B听书';
-  static const String version = '0.2.3';
+  static const String version = '0.2.4';
 }
