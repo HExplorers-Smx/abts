@@ -343,16 +343,16 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 crossAxisSpacing: 12,
                 childAspectRatio: 0.52,
               ),
-              itemCount: books.length + 1, // 最前「＋」新建本地书
+              itemCount: books.length + 1, // 末尾「＋」新建本地书
               itemBuilder: (context, i) {
-                if (i == 0) {
+                if (i == books.length) {
                   return _AddBookTile(
                     onTap: _selectMode
                         ? _exitSelect
                         : () => _createLocalBook(context),
                   );
                 }
-                final sb = books[i - 1];
+                final sb = books[i];
                 final selected = _selected.contains(sb.book.bvid);
                 final tile = BookGridItem(
                   book: sb.book,
