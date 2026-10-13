@@ -10,10 +10,13 @@ import '../models/download_task.dart';
 import '../player/book_player.dart';
 import '../services/app_update.dart';
 import '../services/auth_store.dart';
+import '../services/bookmark_store.dart';
 import '../services/download_manager.dart';
+import '../services/listening_stats.dart';
 import '../services/umeng_analytics.dart';
 import '../widgets/book_cover.dart';
 import 'about_page.dart';
+import 'bookmarks_page.dart';
 import 'downloads_page.dart';
 import 'favorites_page.dart';
 import 'player_page.dart';
@@ -31,6 +34,7 @@ class MyPage extends StatelessWidget {
     final shelf = context.watch<ShelfStore>();
     final player = context.watch<BookPlayer>();
     final auth = context.watch<LoginStore>();
+    final bookmarkCount = context.watch<BookmarkStore>().items.length;
     final books = shelf.books;
     final reading = books.where((b) => b.positionMs > 0).toList();
 
@@ -54,6 +58,8 @@ class MyPage extends StatelessWidget {
           _buildHeader(context, shelf, auth),
           const SizedBox(height: 4),
           _statRow(books, reading),
+          const SizedBox(height: 12),
+          const _ListenStatsCard(),
           const SizedBox(height: 16),
           if (reading.isNotEmpty) _buildContinueReading(context, reading),
           Padding(
@@ -83,6 +89,15 @@ class MyPage extends StatelessWidget {
             subtitle:
                 reading.isEmpty ? '去发现找一本想听的书' : '共 ${reading.length} 本在听',
             onTap: () => _push(context, const RecentPage()),
+          ),
+          _menuTile(
+            context,
+            icon: Icons.bookmark_rounded,
+            color: AppTheme.toneViolet,
+            title: '书签',
+            subtitle:
+                bookmarkCount == 0 ? '收藏想重听的位置' : '共 $bookmarkCount 条',
+            onTap: () => _push(context, const BookmarksPage()),
           ),
           _menuTile(
             context,
@@ -597,5 +612,72 @@ class MyPage extends StatelessWidget {
         ),
       );
     }
+  }
+}
+
+/// 收听统计卡片：今日 / 本周 / 累计
+class _ListenStatsCard extends StatelessWidget {
+  const _ListenStatsCard();
+
+  Future<(int, int, int)> _load() async {
+    final s = ListeningStats.instance;
+    return (
+      await s.todaySeconds(),
+      await s.weekSeconds(),
+      await s.totalSeconds(),
+    );
+  }
+
+  Widget _cell(String label, String value) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.accent,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(fontSize: 11, color: AppTheme.textSub),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppTheme.divider),
+        ),
+        child: FutureBuilder<(int, int, int)>(
+          future: _load(),
+          builder: (context, snap) {
+            final data = snap.data;
+            final today = data == null ? 0 : data.$1;
+            final week = data == null ? 0 : data.$2;
+            final total = data == null ? 0 : data.$3;
+            return Row(
+              children: [
+                _cell('今日', ListeningStats.text(today)),
+                _cell('本周', ListeningStats.text(week)),
+                _cell('累计', ListeningStats.text(total)),
+              ],
+            );
+          },
+        ),
+      ),
+    );
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../player/book_player.dart';
 import '../services/download_manager.dart';
 
 import '../core/theme/app_theme.dart';
@@ -114,6 +115,34 @@ class _SettingsPageState extends State<SettingsPage> {
                       ? '已豁免电池优化，退到后台更不易被系统清理'
                       : '未开启，长时间后台播放可能被系统中断',
               style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.volume_up_rounded, color: AppTheme.accent),
+            title: Text(
+              '音量增强',
+              style: TextStyle(fontSize: 14, color: AppTheme.textMain),
+            ),
+            subtitle: Text(
+              '当前 ${BookPlayer.instance.volumeBoostPercent}%'
+              '（超过 100% 需音频后端支持）',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+            trailing: DropdownButton<int>(
+              value: BookPlayer.instance.volumeBoostPercent,
+              underline: const SizedBox.shrink(),
+              dropdownColor: AppTheme.surface,
+              items: const [
+                DropdownMenuItem(value: 100, child: Text('100%')),
+                DropdownMenuItem(value: 125, child: Text('125%')),
+                DropdownMenuItem(value: 150, child: Text('150%')),
+              ],
+              onChanged: (v) {
+                if (v != null) {
+                  BookPlayer.instance.setVolumeBoost(v);
+                  setState(() {});
+                }
+              },
             ),
           ),
           _sectionTitle('下载与存储'),

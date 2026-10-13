@@ -26,6 +26,9 @@ class _BookshelfPageState extends State<BookshelfPage> {
   bool _selectMode = false;
   final Set<String> _selected = {};
 
+  /// 书架筛选：0 全部 / 1 收听中 / 2 本地
+  int _filter = 0;
+
   void _toggleSelect(String bvid) {
     setState(() {
       _selectMode = true;
@@ -260,7 +263,15 @@ class _BookshelfPageState extends State<BookshelfPage> {
   @override
   Widget build(BuildContext context) {
     final shelf = context.watch<ShelfStore>();
-    final books = shelf.books;
+    final all = shelf.books;
+    final books = switch (_filter) {
+      1 => all.where((b) => b.positionMs > 0).toList(),
+      2 => all
+          .where((b) =>
+              b.book.localPath != null || b.book.localDir != null)
+          .toList(),
+      _ => all,
+    };
 
     return Scaffold(
       appBar: AppBar(
@@ -304,12 +315,19 @@ class _BookshelfPageState extends State<BookshelfPage> {
       body: books.isEmpty
           ? Column(
               children: [
-                const Expanded(
-                  child: EmptyShelfView(
-                    title: '书架还是空的',
-                    subtitle: '去「发现」搜索在线有声书，或点下方新建本地书',
-                    icon: Icons.library_books_outlined,
-                  ),
+                if (all.isNotEmpty) _buildFilterBar(),
+                Expanded(
+                  child: all.isEmpty
+                      ? const EmptyShelfView(
+                          title: '书架还是空的',
+                          subtitle: '去「发现」搜索在线有声书，或点下方新建本地书',
+                          icon: Icons.library_books_outlined,
+                        )
+                      : const EmptyShelfView(
+                          title: '没有符合条件的书',
+                          subtitle: '换个筛选看看，或点下方新建本地书',
+                          icon: Icons.filter_alt_off_rounded,
+                        ),
                 ),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 48),
@@ -321,8 +339,12 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 ),
               ],
             )
-          : GridView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 80),
+          : Column(
+              children: [
+                _buildFilterBar(),
+                Expanded(
+                  child: GridView.builder(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 80),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 3,
                 mainAxisSpacing: 16,
@@ -386,6 +408,47 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 );
               },
             ),
+                  ),
+            ],
+          ),
+    );
+  }
+
+  /// 书架筛选栏：全部 / 收听中 / 本地
+  Widget _buildFilterBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      child: Row(
+        children: [
+          for (final (label, v) in const [
+            ('全部', 0),
+            ('收听中', 1),
+            ('本地', 2),
+          ]) ...[
+            ChoiceChip(
+              label: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: v == _filter ? AppTheme.accent : AppTheme.textSub,
+                  fontWeight:
+                      v == _filter ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+              selected: _filter == v,
+              selectedColor: AppTheme.accent.withValues(alpha: 0.12),
+              showCheckmark: false,
+              backgroundColor: AppTheme.surfaceHigh,
+              side: BorderSide(
+                color: v == _filter ? AppTheme.accent : AppTheme.divider,
+              ),
+              visualDensity: VisualDensity.compact,
+              onSelected: (_) => setState(() => _filter = v),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
+      ),
     );
   }
 }

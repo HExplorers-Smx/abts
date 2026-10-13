@@ -15,6 +15,7 @@ import '../models/chapter.dart';
 import '../services/audio_focus.dart';
 import '../services/bili_api.dart';
 import '../services/download_store.dart';
+import '../services/listening_stats.dart';
 import '../services/umeng_analytics.dart';
 
 /// 听书播放器：按"章节"连播 + 断点续播 + 睡眠定时 + 系统媒体会话
@@ -22,7 +23,7 @@ class BookPlayer extends ChangeNotifier {
   BookPlayer._();
   static final BookPlayer instance = BookPlayer._();
 
-  final Player _player = Player();
+  late final Player _player = Player();
   final BiliApi _api = BiliApi.instance;
   final ShelfStore _shelf = ShelfStore.instance;
 
@@ -44,6 +45,9 @@ class BookPlayer extends ChangeNotifier {
   Timer? _positionTimer;
   Timer? _sleepTimer;
   Duration _sleepRemaining = Duration.zero;
+
+  /// 音量增强系数（1.0 / 1.25 / 1.5）
+  double _boost = 1.0;
 
   /// 播放倍速（0.5x ~ 3.0x，持久化）
   double _rate = 1.0;
@@ -74,6 +78,7 @@ class BookPlayer extends ChangeNotifier {
   Duration get sleepRemaining => _sleepRemaining;
   double get rate => _rate;
   bool get stopAtChapterEnd => _stopAtChapterEnd;
+  int get volumeBoostPercent => (_boost * 100).round();
 
   Chapter? get currentChapter =>
       _chapters.isNotEmpty && _index < _chapters.length
@@ -640,6 +645,8 @@ class BookPlayer extends ChangeNotifier {
       return;
     }
     _playTally += delta;
+    // 收听时长统计（今日/本周/累计）
+    ListeningStats.instance.track(delta);
     if (_playTally >= _autoShelfAfter && !_autoShelved) {
       _autoShelved = true;
       if (!_shelf.isOnShelf(book.bvid)) {
@@ -700,22 +707,55 @@ class BookPlayer extends ChangeNotifier {
     await prefs.setDouble('abts_rate', _rate);
   }
 
+  // ---------- 启动设置（音量增强） ----------
+  /// App 启动时调用：在播放器首次被创建前应用偏好
+  Future<void> loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final boost = prefs.getInt('abts_volume_boost') ?? 100;
+    _boost = (boost / 100).clamp(1.0, 1.5);
+  }
+
+  /// 音量增强：100% / 125% / 150%
+  Future<void> setVolumeBoost(int percent) async {
+    _boost = (percent / 100).clamp(1.0, 1.5);
+    try {
+      await _player.setVolume(100 * _boost);
+    } catch (_) {}
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('abts_volume_boost', percent);
+  }
+
   // ---------- 睡眠定时 ----------
   void setStopAtChapterEnd(bool v) {
     _stopAtChapterEnd = v;
     notifyListeners();
   }
 
+  /// 睡眠倒计时最后 30 秒音量逐渐淡出，到点暂停并恢复原音量
+  static const Duration _sleepFadeWindow = Duration(seconds: 30);
+  double _sleepBaseVolume = 1.0;
+
   void setSleepTimer(Duration d) {
     _sleepTimer?.cancel();
     _sleepRemaining = d;
+    _sleepBaseVolume = _player.state.volume;
     AppAnalytics.onEvent('sleep_timer_use', {'minutes': d.inMinutes});
     _sleepTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       _sleepRemaining -= const Duration(seconds: 1);
       if (_sleepRemaining <= Duration.zero) {
         t.cancel();
         _sleepRemaining = Duration.zero;
-        pause();
+        unawaited(_player.setVolume(_sleepBaseVolume));
+        unawaited(pause());
+      } else if (_sleepRemaining <= _sleepFadeWindow) {
+        // 淡出：音量 = 基础音量 × 剩余占比
+        final ratio = _sleepRemaining.inMilliseconds /
+            _sleepFadeWindow.inMilliseconds;
+        final v = _sleepBaseVolume * ratio;
+        if (v > 0.02) {
+          unawaited(_player.setVolume(v));
+        }
       }
       notifyListeners();
     });
@@ -725,6 +765,7 @@ class BookPlayer extends ChangeNotifier {
   void cancelSleepTimer() {
     _sleepTimer?.cancel();
     _sleepRemaining = Duration.zero;
+    unawaited(_player.setVolume(_sleepBaseVolume));
     notifyListeners();
   }
 }
