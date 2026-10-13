@@ -73,41 +73,51 @@ class AppUpdate {
   /// 检查最新版本。
   ///
   /// 未配置仓库时直接返回 [configured=false]，不发起网络请求。
+  /// 官方 API 失败时自动走加速镜像重试（国内网络兜底）。
   static Future<UpdateResult> check() async {
     if (!configured) {
       return const UpdateResult(configured: false);
     }
-    try {
-      final resp = await Dio().get(
-        _apiUrl,
-        options: Options(
-          headers: {'Accept': 'application/vnd.github+json'},
-          responseType: ResponseType.json,
-        ),
-      );
-      final data = resp.data as Map? ?? {};
-      String? apkUrl;
-      final assets = data['assets'] as List? ?? const [];
-      for (final a in assets) {
-        final m = a as Map?;
-        final name = '${m?['name'] ?? ''}';
-        if (name.endsWith('.apk')) {
-          apkUrl = '${m?['browser_download_url'] ?? ''}';
-          break;
+    final endpoints = <String>[
+      _apiUrl,
+      for (final m in _downloadMirrors) '$m$_apiUrl',
+    ];
+    for (final endpoint in endpoints) {
+      try {
+        final resp = await Dio(
+          BaseOptions(connectTimeout: const Duration(seconds: 12)),
+        ).get(
+          endpoint,
+          options: Options(
+            headers: {'Accept': 'application/vnd.github+json'},
+            responseType: ResponseType.json,
+          ),
+        );
+        final data = resp.data as Map? ?? {};
+        String? apkUrl;
+        final assets = data['assets'] as List? ?? const [];
+        for (final a in assets) {
+          final m = a as Map?;
+          final name = '${m?['name'] ?? ''}';
+          if (name.endsWith('.apk')) {
+            apkUrl = '${m?['browser_download_url'] ?? ''}';
+            break;
+          }
         }
+        final tag = '${data['tag_name'] ?? ''}';
+        return UpdateResult(
+          configured: true,
+          latestVersion: tag.isEmpty ? null : tag.replaceFirst(RegExp(r'^v'), ''),
+          latestName: '${data['name'] ?? ''}',
+          changelog: '${data['body'] ?? ''}'.trim(),
+          htmlUrl: '${data['html_url'] ?? _downloadBase}',
+          apkUrl: apkUrl?.isEmpty == true ? null : apkUrl,
+        );
+      } catch (_) {
+        // 该端点失败，继续尝试下一个（官方 → 镜像）
       }
-      final tag = '${data['tag_name'] ?? ''}';
-      return UpdateResult(
-        configured: true,
-        latestVersion: tag.isEmpty ? null : tag.replaceFirst(RegExp(r'^v'), ''),
-        latestName: '${data['name'] ?? ''}',
-        changelog: '${data['body'] ?? ''}'.trim(),
-        htmlUrl: '${data['html_url'] ?? _downloadBase}',
-        apkUrl: apkUrl?.isEmpty == true ? null : apkUrl,
-      );
-    } catch (e) {
-      return UpdateResult(configured: true, error: '检查更新失败，请稍后重试');
     }
+    return UpdateResult(configured: true, error: '检查更新失败，请稍后重试');
   }
 
   /// 本次版本 APK 的本地保存路径（应用文档目录/updates 下）。
@@ -122,31 +132,54 @@ class AppUpdate {
 
   /// 下载 APK 到本地（GitHub Releases 资产，带 302 跳转，需跟随）。
   ///
-  /// [onProgress] 上报 (receivedBytes, totalBytes)，[cancelToken] 可取消；
-  /// 成功后返回落盘路径，失败抛出异常。
+  /// 国内直连 GitHub 下载很慢，内置多个加速镜像按顺序尝试，
+  /// 全部失败后回退官方地址再试一次；[onProgress] 上报进度，
+  /// [cancelToken] 可取消；成功后返回落盘路径，失败抛出异常。
+  ///
+  /// 镜像格式：`<镜像根>/<原始URL>`，仅对 GitHub 官方域名做代理。
+  static const List<String> _downloadMirrors = [
+    'https://ghproxy.net/',
+    'https://ghfast.top/',
+    'https://gh-proxy.com/',
+  ];
+
   static Future<String> downloadApk({
     required String url,
     required String savePath,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {
-    final file = File(savePath);
-    if (file.existsSync()) {
-      // 上次未下完的半成品先清掉，避免拼坏文件
-      await file.delete();
+    final candidates = <String>[
+      for (final m in _downloadMirrors) '$m$url',
+      url, // 兜底：镜像全部失败后回退官方直连
+    ];
+    Object? lastErr;
+    for (final target in candidates) {
+      try {
+        final file = File(savePath);
+        if (file.existsSync()) {
+          // 上次未下完的半成品先清掉，避免拼坏文件
+          await file.delete();
+        }
+        await Dio(BaseOptions(connectTimeout: const Duration(seconds: 12)))
+            .download(
+          target,
+          savePath,
+          cancelToken: cancelToken,
+          options: Options(
+            headers: {'User-Agent': BiliEndpoints.userAgent},
+            followRedirects: true,
+          ),
+          onReceiveProgress: onProgress == null
+              ? null
+              : (received, total) =>
+                  onProgress(received, total < 0 ? 0 : total),
+        );
+        return savePath;
+      } catch (e) {
+        lastErr = e;
+      }
     }
-    await Dio().download(
-      url,
-      savePath,
-      cancelToken: cancelToken,
-      options: Options(
-        headers: {'User-Agent': BiliEndpoints.userAgent},
-        followRedirects: true,
-      ),
-      onReceiveProgress: onProgress == null
-          ? null
-          : (received, total) => onProgress(received, total < 0 ? 0 : total),
-    );
-    return savePath;
+    throw lastErr!;
   }
 }
