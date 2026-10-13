@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/download_task.dart';
+import '../models/lyric_line.dart';
 
 /// 一本书的下载汇总（下载页按书分组展示用）
 class DownloadBookSummary {
@@ -72,6 +74,37 @@ class DownloadStore extends ChangeNotifier {
     final p = t.localPath;
     if (p == null || p.isEmpty) return null;
     return p;
+  }
+
+  /// 已下载章节的本地文稿文件路径（音频已下载且文稿文件存在，否则 null）。
+  ///
+  /// 文稿与音频同名存储：`<bvid>_<cid>.lyrics.json`，由 DownloadManager
+  /// 在音频下载完成后调用 B 站 AI 字幕接口生成并落盘。
+  Future<String?> localLyricsPathFor(String bvid, int cid) async {
+    final p = localPathFor(bvid, cid);
+    if (p == null) return null;
+    final idx = p.lastIndexOf('/');
+    final dir = idx > 0 ? p.substring(0, idx) : p;
+    final f = File('$dir/${bvid}_$cid.lyrics.json');
+    if (await f.exists()) return f.path;
+    return null;
+  }
+
+  /// 读取已下载章节的本地文稿；无文件或文件损坏返回 null。
+  Future<List<LyricLine>?> localLyricsFor(String bvid, int cid) async {
+    final path = await localLyricsPathFor(bvid, cid);
+    if (path == null) return null;
+    try {
+      final raw = await File(path).readAsString();
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final list = (map['lines'] as List?) ?? [];
+      final lines = list
+          .map((e) => LyricLine.fromJson((e as Map).cast<String, dynamic>()))
+          .toList();
+      return lines.isEmpty ? null : lines;
+    } catch (_) {
+      return null;
+    }
   }
 
   int get doneCount => _tasks.where((t) => t.completed).length;

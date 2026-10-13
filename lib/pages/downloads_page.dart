@@ -57,6 +57,8 @@ class DownloadsPage extends StatelessWidget {
     final hasIdle = store.tasks.any((t) => !t.completed && !t.active);
     return Column(
       children: [
+        if (mgr.wifiOnly && mgr.wifiBlocked > 0)
+          _buildWifiBlockedBar(context, mgr, store),
         _buildSummaryBar(context, mgr, store, hasActive, hasIdle),
         Expanded(
           child: ListView.builder(
@@ -69,6 +71,42 @@ class DownloadsPage extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  /// 「仅 Wi-Fi」模式下被拦下的任务提示条：可一键临时放行
+  Widget _buildWifiBlockedBar(
+      BuildContext context, DownloadManager mgr, DownloadStore store) {
+    final n = mgr.wifiBlocked;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppTheme.accentSoft.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.accent.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.wifi_off_rounded, size: 18, color: AppTheme.accent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                n > 1 ? '$n 个下载任务正等待 Wi-Fi' : '1 个下载任务正等待 Wi-Fi',
+                style: TextStyle(fontSize: 12, color: AppTheme.textMain),
+              ),
+            ),
+            TextButton(
+              onPressed: () => mgr.setWifiOnly(false),
+              style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.accent,
+                  padding: const EdgeInsets.symmetric(horizontal: 8)),
+              child: const Text('用流量继续', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

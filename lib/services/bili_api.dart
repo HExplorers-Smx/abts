@@ -3,6 +3,7 @@ import '../core/network/bili_client.dart';
 import '../models/audio_stream.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
+import '../models/lyric_line.dart';
 
 /// B 站听书数据访问层
 class BiliApi {
@@ -232,6 +233,90 @@ class BiliApi {
     );
     final data = res.data as Map;
     return BookAudio.fromMap((data['data'] as Map).cast<String, dynamic>());
+  }
+
+  // ---------- 文稿（歌词数据源） ----------
+
+  /// 文稿内存缓存：bvid/cid -> 行列表
+  final Map<String, List<LyricLine>> _lyricCache = {};
+
+  /// 获取章节文稿并解析为歌词行列表。
+  ///
+  /// 有声书没有传统 LRC，这里把 B 站为该书生成的 AI 字幕（即声音对应的
+  /// 文字稿）当作歌词数据源：优先中文字幕，没有时退回第一条；
+  /// 返回空数组表示本章没有可显示的文字。
+  Future<List<LyricLine>> fetchLyrics(String bvid, int cid) async {
+    final key = '$bvid/$cid';
+    final cached = _lyricCache[key];
+    if (cached != null) return cached;
+
+    final res = await _client.get(
+      BiliEndpoints.playerV2,
+      query: {'bvid': bvid, 'cid': cid},
+      useWbi: true,
+    );
+    final data = (res.data as Map)['data'] as Map? ?? {};
+    final subs = ((data['subtitle'] as Map? ?? {})['subtitles'] as List?) ?? [];
+
+    String? url;
+    for (final s in subs) {
+      if (s is! Map) continue;
+      final lan = '${s['lan'] ?? ''}';
+      final lanDoc = '${s['lan_doc'] ?? ''}';
+      if (url == null && (lan.contains('zh') || lanDoc.contains('中'))) {
+        url = s['subtitle_url'] as String?;
+      }
+    }
+    // 没有中文字幕时退回第一条可用字幕
+    if (url == null || url.isEmpty) {
+      for (final s in subs) {
+        if (s is Map && s['subtitle_url'] is String && (s['subtitle_url'] as String).isNotEmpty) {
+          url = s['subtitle_url'] as String;
+          break;
+        }
+      }
+    }
+    if (url == null || url.isEmpty) {
+      _lyricCache[key] = const [];
+      return const [];
+    }
+
+    final subRes = await _client.get(
+      url.startsWith('//') ? 'https:$url' : url,
+      headers: const {
+        'Referer': BiliEndpoints.home,
+        'Origin': BiliEndpoints.home,
+      },
+    );
+    final body = ((subRes.data as Map)['body'] as List?) ?? [];
+
+    final raw = <({double from, double to, String text})>[];
+    for (final b in body) {
+      if (b is! Map) continue;
+      final text = '${b['content'] ?? ''}'.trim();
+      if (text.isEmpty) continue;
+      raw.add((
+        from: double.tryParse('${b['from'] ?? 0}') ?? 0,
+        to: double.tryParse('${b['to'] ?? 0}') ?? 0,
+        text: text,
+      ));
+    }
+    // 结束时间缺失/非法时，用下一句的开始补全，最后一句兜底 3 秒
+    final lines = <LyricLine>[];
+    for (var i = 0; i < raw.length; i++) {
+      final r = raw[i];
+      var end = r.to;
+      if (end <= r.from) {
+        end = i + 1 < raw.length ? raw[i + 1].from : r.from + 3;
+      }
+      lines.add(LyricLine(start: r.from, end: end, text: r.text));
+    }
+
+    if (_lyricCache.length > 40) {
+      _lyricCache.remove(_lyricCache.keys.first);
+    }
+    _lyricCache[key] = lines;
+    return lines;
   }
 
   // ---------- 二维码登录（网页 passport 流程） ----------

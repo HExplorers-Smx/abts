@@ -27,6 +27,9 @@ class BiliEndpoints {
   /// 取流
   static const String playUrl = '$base/x/player/wbi/playurl';
 
+  /// 播放器信息（含 CC/AI 字幕列表，用作歌词数据源）
+  static const String playerV2 = '$base/x/player/wbi/v2';
+
   /// buvid 激活（gaia 风控闭环：ExClimbWuzhi）
   static const String activateBuvid = '$base/x/internal/gaia-gateway/ExClimbWuzhi';
 

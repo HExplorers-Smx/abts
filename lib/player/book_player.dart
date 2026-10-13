@@ -300,22 +300,39 @@ class BookPlayer extends ChangeNotifier {
         throw StateError('章节索引越界：$index');
       }
       final chapter = _chapters[index];
-      // 已下载的章节优先播本地文件，失败自动回退在线流
-      final candidates = <String>[];
+      // 已下载章节离线优先：直接播本地文件，绝不先发网络请求。
+      // （在线取流在断网时会抛异常，绝不能让它挡住本地播放——
+      //   这是"下载了还提示没网络"的根因：旧逻辑无条件先请求在线流）
       final localPath =
           DownloadStore.instance.localPathFor(_book!.bvid, chapter.cid);
-      if (localPath != null && await File(localPath).exists()) {
+      final candidates = <String>[];
+      final hasLocal = localPath != null && await File(localPath).exists();
+      if (hasLocal) {
         candidates.add(localPath);
         debugPrint('[BookPlayer] 使用本地已下载文件: $localPath');
       }
-      candidates.addAll(await _fetchStreamCandidates(chapter.cid));
+      var networkFetched = false;
+      Future<void> ensureNetworkCandidates() async {
+        if (networkFetched) return;
+        networkFetched = true;
+        try {
+          final online = await _fetchStreamCandidates(chapter.cid);
+          candidates.addAll(online);
+        } catch (e) {
+          debugPrint('[BookPlayer] 在线取流失败: $e');
+        }
+      }
+      // 没有本地文件时才需要在线流；有本地文件则先试本地
+      if (!hasLocal) {
+        await ensureNetworkCandidates();
+      }
       if (candidates.isEmpty) {
         throw StateError('获取音频链接失败（章节可能无法播放）');
       }
 
       for (var i = 0; i < candidates.length; i++) {
         final url = candidates[i];
-        final isLocal = i == 0 && url == localPath;
+        final isLocal = hasLocal && url == localPath;
         try {
           // 有续播位置时先打开再精确跳转，保证落点准确到秒
           await _player.open(
@@ -337,6 +354,10 @@ class BookPlayer extends ChangeNotifier {
           break;
         } catch (e) {
           debugPrint('[BookPlayer] 候选音轨 $i 打开失败: $e');
+          if (isLocal) {
+            // 本地文件打不开（损坏/被删）→ 联网兜底再试
+            await ensureNetworkCandidates();
+          }
           if (i < candidates.length - 1) {
             await _player.stop();
           }

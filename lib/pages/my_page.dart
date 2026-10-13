@@ -450,7 +450,7 @@ class MyPage extends StatelessWidget {
       );
       return;
     }
-    final apk = result.apkUrl ?? result.htmlUrl ?? '';
+    final apk = result.apkUrl ?? '';
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -475,7 +475,7 @@ class MyPage extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   '更新内容：\n${result.changelog}',
-style: TextStyle(
+                  style: TextStyle(
                     fontSize: 12, color: AppTheme.textSub, height: 1.6),
                 ),
               ],
@@ -490,22 +490,112 @@ style: TextStyle(
           if (apk.isNotEmpty)
             TextButton(
               onPressed: () {
+                final version = result.latestVersion ?? AppMeta.version;
                 Navigator.of(ctx).pop();
-                _openUrl(context, apk);
+                _downloadAndInstall(context, apk, version);
               },
-              child: const Text('下载更新', style: TextStyle(color: AppTheme.accent)),
+              child: const Text('立即更新', style: TextStyle(color: AppTheme.accent)),
             ),
         ],
       ),
     );
   }
 
-  Future<void> _openUrl(BuildContext context, String url) async {
-    await Clipboard.setData(ClipboardData(text: url));
+  /// 内置下载更新 APK：进度弹窗 → 落盘 → 拉起系统安装器（不再复制链接）
+  Future<void> _downloadAndInstall(
+      BuildContext context, String apkUrl, String version) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final savePath = await AppUpdate.apkSavePath(version);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('下载链接已复制\n$url'),
-          duration: const Duration(seconds: 3)),
+
+    var received = 0;
+    var total = 0;
+    void Function(void Function())? refreshDialog;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) {
+          refreshDialog = setState;
+          return AlertDialog(
+            backgroundColor: AppTheme.surface,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '正在下载更新…',
+                  style: TextStyle(fontSize: 15, color: AppTheme.textMain),
+                ),
+                const SizedBox(height: 16),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    minHeight: 6,
+                    value: total <= 0
+                        ? null
+                        : (received / total).clamp(0.0, 1.0),
+                    color: AppTheme.accent,
+                    backgroundColor: AppTheme.divider,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${DownloadTask.formatBytes(received)}'
+                  '${total > 0 ? ' / ${DownloadTask.formatBytes(total)}' : ''}',
+                  style: TextStyle(
+                      fontSize: 12, color: AppTheme.textSub),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
+
+    try {
+      await AppUpdate.downloadApk(
+        url: apkUrl,
+        savePath: savePath,
+        onProgress: (r, t) {
+          received = r;
+          total = t;
+          refreshDialog?.call(() {});
+        },
+      );
+      if (!context.mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // 关闭进度弹窗
+      // 调起系统安装器完成安装
+      const channel = MethodChannel('abts/installer');
+      final ok = await channel
+              .invokeMethod<bool>('installApk', {'path': savePath}) ??
+          false;
+      if (ok) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('安装包已就绪，请按系统提示完成安装'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('自动安装未成功，请检查是否允许安装未知来源应用'),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[MyPage] 更新下载失败: $e');
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop(); // 关闭进度弹窗
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('更新下载失败：$e'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 }

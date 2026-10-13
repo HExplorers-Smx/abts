@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../core/app_meta.dart';
+import '../core/network/api_config.dart';
 
 /// 检查更新：数据源走 GitHub Releases
 ///
@@ -104,5 +108,45 @@ class AppUpdate {
     } catch (e) {
       return UpdateResult(configured: true, error: '检查更新失败，请稍后重试');
     }
+  }
+
+  /// 本次版本 APK 的本地保存路径（应用文档目录/updates 下）。
+  /// 文件名含版本号，重复下载会覆盖旧文件。
+  static Future<String> apkSavePath(String version) async {
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docs.path}/updates');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final safe = version.replaceAll(RegExp(r'[^\w.-]'), '_');
+    return '${dir.path}/abts-$safe.apk';
+  }
+
+  /// 下载 APK 到本地（GitHub Releases 资产，带 302 跳转，需跟随）。
+  ///
+  /// [onProgress] 上报 (receivedBytes, totalBytes)，[cancelToken] 可取消；
+  /// 成功后返回落盘路径，失败抛出异常。
+  static Future<String> downloadApk({
+    required String url,
+    required String savePath,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    final file = File(savePath);
+    if (file.existsSync()) {
+      // 上次未下完的半成品先清掉，避免拼坏文件
+      await file.delete();
+    }
+    await Dio().download(
+      url,
+      savePath,
+      cancelToken: cancelToken,
+      options: Options(
+        headers: {'User-Agent': BiliEndpoints.userAgent},
+        followRedirects: true,
+      ),
+      onReceiveProgress: onProgress == null
+          ? null
+          : (received, total) => onProgress(received, total < 0 ? 0 : total),
+    );
+    return savePath;
   }
 }

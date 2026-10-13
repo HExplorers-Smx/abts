@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -482,6 +483,10 @@ class DownloadManager extends ChangeNotifier {
         final finalized = await _finalize(task);
         if (!finalized) {
           _fail(task, '文件写入失败');
+        } else {
+          // 音频落盘后异步拉取文字稿（B 站 AI 字幕）一并保存，
+          // 失败不影响下载成功，离线播放时仍可显示文稿
+          unawaited(_persistLyrics(task));
         }
       }
     } finally {
@@ -489,6 +494,26 @@ class DownloadManager extends ChangeNotifier {
       _tokens.remove(key);
       _active--;
       _pump();
+    }
+  }
+
+  /// 为已下载章节生成并保存文字稿：`<bvid>_<cid>.lyrics.json`。
+  /// 章节没有文字稿（API 返回空）时不落盘；任何失败静默忽略。
+  Future<void> _persistLyrics(DownloadTask task) async {
+    final dir = _dir;
+    if (dir == null) return;
+    try {
+      final lines = await _api.fetchLyrics(task.bvid, task.cid);
+      if (lines.isEmpty) return;
+      final f = File('${dir.path}/${task.key}.lyrics.json');
+      await f.writeAsString(jsonEncode({
+        'version': 1,
+        'lines': [for (final l in lines) l.toJson()],
+      }));
+      debugPrint('[DownloadManager] 文稿落盘: ${task.key}.lyrics.json '
+          '(${lines.length} 行)');
+    } catch (e) {
+      debugPrint('[DownloadManager] 文稿生成失败（忽略）: $e');
     }
   }
 
@@ -678,7 +703,7 @@ class DownloadManager extends ChangeNotifier {
     final dir = _dir;
     if (dir == null) return;
     final key = task.key;
-    for (final name in ['$key.part', '$key.m4s']) {
+    for (final name in ['$key.part', '$key.m4s', '$key.lyrics.json']) {
       try {
         final f = File('${dir.path}/$name');
         if (await f.exists()) await f.delete();

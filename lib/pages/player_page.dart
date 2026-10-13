@@ -11,6 +11,7 @@ import '../models/chapter.dart';
 import '../player/book_player.dart';
 import '../utils/format.dart';
 import '../widgets/book_cover.dart';
+import '../widgets/lyrics_view.dart';
 
 /// 全屏播放页（PiliPlus 风格）
 class PlayerPage extends StatefulWidget {
@@ -22,6 +23,9 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> {
   double _dragValue = -1;
+
+  /// 中间区域视图：false = 封面，true = 歌词（点击切换）
+  bool _showLyrics = false;
 
   @override
   void dispose() {
@@ -85,7 +89,7 @@ class _PlayerPageState extends State<PlayerPage> {
             child: Column(
               children: [
                 _buildAppBar(player),
-                Expanded(child: _buildCover(book)),
+                Expanded(child: _buildMiddle(player, book)),
                 _buildTitle(book, chapter),
                 _buildProgress(player, chapter),
                 _buildControls(player),
@@ -145,6 +149,78 @@ class _PlayerPageState extends State<PlayerPage> {
         const SnackBar(content: Text('分享失败，请稍后重试')),
       );
     }
+  }
+
+  /// 中间区域：封面 / 歌词，点击切换（像音乐播放器一样）
+  Widget _buildMiddle(BookPlayer player, Book book) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 320),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.94, end: 1).animate(animation),
+                child: child,
+              ),
+            ),
+            child: _showLyrics
+                ? LyricsView(
+                    key: const ValueKey('lyrics'),
+                    player: player,
+                    onToggleCover: () =>
+                        setState(() => _showLyrics = false),
+                  )
+                : GestureDetector(
+                    key: const ValueKey('cover'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _showLyrics = true),
+                    child: _buildCover(book),
+                  ),
+          ),
+        ),
+        // 右上角：歌词 / 封面切换提示
+        Positioned(
+          top: 6,
+          right: 12,
+          child: _buildViewToggle(),
+        ),
+      ],
+    );
+  }
+
+  /// 右上角「歌词 / 封面」切换胶囊
+  Widget _buildViewToggle() {
+    final showLyrics = _showLyrics;
+    return GestureDetector(
+      onTap: () => setState(() => _showLyrics = !_showLyrics),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: AppTheme.surface.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppTheme.divider.withValues(alpha: 0.6)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              showLyrics ? Icons.album_rounded : Icons.lyrics_rounded,
+              size: 14,
+              color: AppTheme.textSub,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              showLyrics ? '封面' : '歌词',
+              style: TextStyle(fontSize: 11, color: AppTheme.textSub),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showChapterSheet(BookPlayer player) {
@@ -418,51 +494,57 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
+  /// 底部操作行：功能少时居中，功能多时横向滑动（后续新功能加进 children 即可）
   Widget _buildActionRow(BookPlayer player) {
+    const pad = 16.0;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          ActionChip(
-            avatar:  Icon(Icons.format_list_bulleted,
-                size: 16, color: AppTheme.accent),
-            label: Text(
-              '目录 · ${player.chapters.length} 章',
-              style: const TextStyle(fontSize: 12),
+      padding: const EdgeInsets.only(bottom: 20),
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: pad),
+          // 内容不满一屏时保持居中；超过一屏宽度时 ConstrainedBox 不限制，
+          // Row 自然排开、可完整滚动（避免居中+滚动时左端被裁掉）
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth - pad * 2),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ActionChip(
+                  avatar:  Icon(Icons.format_list_bulleted,
+                      size: 16, color: AppTheme.accent),
+                  label: Text(
+                    '目录 · ${player.chapters.length} 章',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onPressed: () => _showChapterSheet(player),
+                ),
+                const SizedBox(width: 10),
+                ActionChip(
+                  avatar:  Icon(Icons.speed_rounded,
+                      size: 16, color: AppTheme.accent),
+                  label: Text(
+                    player.rate == 1.0 ? '倍速' : '${player.rate}x',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onPressed: () => _showRateSheet(player),
+                ),
+                const SizedBox(width: 10),
+                ActionChip(
+                  avatar:  Icon(Icons.bedtime_outlined,
+                      size: 16, color: AppTheme.accent),
+                  label: Text(
+                    player.sleepRemaining > Duration.zero
+                        ? '睡眠 ${Fmt.sleepText(player.sleepRemaining)}'
+                        : '睡眠定时',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onPressed: () => _showSleepSheet(player),
+                ),
+              ],
             ),
-            onPressed: () => _showChapterSheet(player),
           ),
-          const SizedBox(width: 10),
-          ActionChip(
-            avatar:  Icon(Icons.speed_rounded,
-                size: 16, color: AppTheme.accent),
-            label: Text(
-              player.rate == 1.0 ? '倍速' : '${player.rate}x',
-              style: const TextStyle(fontSize: 12),
-            ),
-            onPressed: () => _showRateSheet(player),
-          ),
-          const SizedBox(width: 10),
-          ActionChip(
-            avatar:  Icon(Icons.bedtime_outlined,
-                size: 16, color: AppTheme.accent),
-            label: Text(
-              player.sleepRemaining > Duration.zero
-                  ? '睡眠 ${Fmt.sleepText(player.sleepRemaining)}'
-                  : '睡眠定时',
-              style: const TextStyle(fontSize: 12),
-            ),
-            onPressed: () => _showSleepSheet(player),
-          ),
-          const SizedBox(width: 10),
-          ActionChip(
-            avatar:  Icon(Icons.share_outlined,
-                size: 16, color: AppTheme.accent),
-            label: const Text('分享', style: TextStyle(fontSize: 12)),
-            onPressed: () => _share(player),
-          ),
-        ],
+        ),
       ),
     );
   }

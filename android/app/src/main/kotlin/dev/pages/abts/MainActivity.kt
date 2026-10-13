@@ -127,6 +127,49 @@ class MainActivity : AudioServiceActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // 内置更新：安装下载好的 APK
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "abts/installer",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "installApk" -> {
+                    result.success(installApk(call.argument<String>("path")))
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /** 拉起系统安装器安装 APK；成功拉起返回 true，失败返回 false */
+    private fun installApk(path: String?): Boolean {
+        if (path.isNullOrEmpty()) return false
+        return try {
+            val file = java.io.File(path)
+            if (!file.exists()) return false
+            // Android 7.0+ 必须用 content://（FileProvider），file:// 会崩
+            val apkUri: Uri =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    androidx.core.content.FileProvider.getUriForFile(
+                        this,
+                        "$packageName.fileprovider",
+                        file,
+                    )
+                } else {
+                    Uri.fromFile(file)
+                }
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun requestFocus(): Boolean {
