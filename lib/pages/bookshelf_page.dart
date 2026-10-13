@@ -312,30 +312,11 @@ class _BookshelfPageState extends State<BookshelfPage> {
                   ),
               ],
       ),
-      body: books.isEmpty
-          ? Column(
-              children: [
-                if (all.isNotEmpty) _buildFilterBar(),
-                Expanded(
-                  child: all.isEmpty
-                      ? _EmptyAddView(
-                          onAdd: () => _createLocalBook(context),
-                          title: '书架还没有书',
-                          subtitle: '点上方「+」新建本地书，或去「发现」找在线有声书',
-                        )
-                      : _EmptyAddView(
-                          onAdd: () => _createLocalBook(context),
-                          title: '没有符合条件的书',
-                          subtitle: '换个筛选看看，或点「+」新建本地书',
-                        ),
-                ),
-              ],
-            )
-          : Column(
-              children: [
-                _buildFilterBar(),
-                Expanded(
-                  child: GridView.builder(
+      body: Column(
+        children: [
+          if (all.isNotEmpty) _buildFilterBar(),
+          Expanded(
+            child: GridView.builder(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 80),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 3,
@@ -343,7 +324,9 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 crossAxisSpacing: 12,
                 childAspectRatio: 0.52,
               ),
-              itemCount: books.length + 1, // 末尾「＋」新建本地书
+              // 空书架时 i==books.length==0，「+」自然落在第一个位置；
+              // 有书时「+」跟在最后一本书后面
+              itemCount: books.length + 1,
               itemBuilder: (context, i) {
                 if (i == books.length) {
                   return _AddBookTile(
@@ -400,9 +383,9 @@ class _BookshelfPageState extends State<BookshelfPage> {
                 );
               },
             ),
-                  ),
-            ],
           ),
+        ],
+      ),
     );
   }
 
@@ -477,58 +460,6 @@ class _AddBookTile extends StatelessWidget {
             Text(
               '书名 / 封面 / 音频',
               style: TextStyle(fontSize: 11, color: AppTheme.textHint),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 空态：居中一个「＋」新建本地书卡片 + 提示文案（与网格内加号风格一致）
-class _EmptyAddView extends StatelessWidget {
-  final VoidCallback onAdd;
-  final String title;
-  final String subtitle;
-
-  const _EmptyAddView({
-    required this.onAdd,
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 48),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: 220,
-              height: 150,
-              child: _AddBookTile(onTap: onAdd),
-            ),
-            const SizedBox(height: 22),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: AppTheme.textMain,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.5,
-                color: AppTheme.textHint,
-              ),
             ),
           ],
         ),
