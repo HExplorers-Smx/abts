@@ -3,11 +3,14 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
 import '../models/chapter.dart';
+import 'baidu_asr.dart';
 import 'lyric_matcher.dart';
+import 'lyrics_parser.dart';
 
 /// 本地音频导入：把用户选择的音频文件复制进应用目录，
 /// 包装成一本"本地书"（bvid 以 `local_` 开头），
@@ -133,13 +136,35 @@ class LocalLibrary {
           duration: 0,
           localPath: dst.path,
         ));
-        // 导入后自动匹配音乐歌词（网易云）：成功即写入同目录 .lyrics.json，
-        // 失败静默不打扰（章节页仍可手动导入文稿）
-        unawaited(LyricMatcher.matchAndSave(dst, name));
+        // 导入后自动配文稿：先网易云匹配音乐歌词（免费）；
+        // 未命中且用户已在设置里配置百度语音转写 → 自动转写生成文稿。
+        // 全部失败静默，章节页仍可手动导入/转写
+        unawaited(_autoLyrics(dst, name));
       } catch (_) {}
     }
 
     return _copyBook(book, chapters: chapters);
+  }
+
+  /// 自动生成章节文稿：网易云歌词匹配 → 百度语音转写（可选）
+  Future<void> _autoLyrics(File audioFile, String fileName) async {
+    try {
+      if (await LyricMatcher.matchAndSave(audioFile, fileName)) return;
+      final cfg = await BaiduAsr.loadConfig();
+      if (!cfg.isConfigured || !cfg.enabled) return;
+      if (LyricsParser.lyricsFileExists(audioFile)) return;
+      final lines = await BaiduAsr.transcribe(
+        audioFile,
+        apiKey: cfg.apiKey,
+        secretKey: cfg.secretKey,
+      );
+      if (lines == null || lines.isEmpty) return;
+      await LyricsParser.saveLyricsFile(audioFile, lines);
+      debugPrint('[LocalLibrary] 百度转写文稿已生成: '
+          '${audioFile.path} (${lines.length} 行)');
+    } catch (e) {
+      debugPrint('[LocalLibrary] 自动文稿生成失败（忽略）: $e');
+    }
   }
 
   /// 更新本地书的元信息（书名/作者/简介/封面）。

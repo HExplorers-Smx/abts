@@ -6,6 +6,7 @@ import '../services/download_manager.dart';
 
 import '../core/theme/app_theme.dart';
 import '../services/auth_store.dart';
+import '../services/baidu_asr.dart';
 import '../services/device_service.dart';
 import 'login_page.dart';
 
@@ -21,10 +22,20 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _loading = true;
   bool _ignoring = false;
 
+  // 百度语音转写配置（内存副本，保存时写回 SharedPreferences）
+  String _asrAppId = '';
+  String _asrApiKey = '';
+  String _asrSecretKey = '';
+  bool _asrEnabled = false;
+
+  bool get _asrConfigured =>
+      _asrAppId.isNotEmpty && _asrApiKey.isNotEmpty && _asrSecretKey.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
     _refresh();
+    _refreshAsr();
   }
 
   Future<void> _refresh() async {
@@ -183,9 +194,156 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ),
+          _sectionTitle('语音转写（百度）'),
+          ListTile(
+            leading: Icon(Icons.translate_rounded, color: AppTheme.accent),
+            title: Text(
+              '百度语音转写',
+              style: TextStyle(fontSize: 14, color: AppTheme.textMain),
+            ),
+            subtitle: Text(
+              _asrConfigured
+                  ? '已配置${_asrEnabled ? '，导入音频后自动转写文稿' : '，自动转写已关闭'}'
+                  : '未配置 · 点此填写 AppID / API Key / Secret Key',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+            trailing: Icon(Icons.chevron_right_rounded,
+                color: AppTheme.textHint, size: 20),
+            onTap: _editAsrConfig,
+          ),
+          SwitchListTile(
+            value: _asrEnabled,
+            onChanged: _asrConfigured
+                ? (v) async {
+                    await BaiduAsr.saveConfig(
+                      appId: _asrAppId,
+                      apiKey: _asrApiKey,
+                      secretKey: _asrSecretKey,
+                      enabled: v,
+                    );
+                    _refreshAsr();
+                  }
+                : null,
+            activeThumbColor: AppTheme.accent,
+            secondary:
+                Icon(Icons.auto_awesome_rounded, color: AppTheme.accent),
+            title: Text(
+              '导入音频后自动转写文稿',
+              style: TextStyle(fontSize: 14, color: AppTheme.textMain),
+            ),
+            subtitle: Text(
+              '开启后，导入的本地音频没有匹配到歌词时会自动调用百度'
+              '转写生成文稿（消耗免费额度/余额）',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  /// 编辑百度语音转写配置
+  Future<void> _editAsrConfig() async {
+    final appId = TextEditingController(text: _asrAppId);
+    final apiKey = TextEditingController(text: _asrApiKey);
+    final secretKey = TextEditingController(text: _asrSecretKey);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: Text('百度语音转写',
+            style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: appId,
+                keyboardType: TextInputType.number,
+                decoration: _asrInputDeco('AppID'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: apiKey,
+                decoration: _asrInputDeco('API Key'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: secretKey,
+                decoration: _asrInputDeco('Secret Key'),
+                obscureText: true,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '凭证只保存在本机，用于调用百度「录音文件识别」服务。'
+                '获取方式：百度智能云控制台 → 语音技术 → 创建应用。',
+                style: TextStyle(
+                    fontSize: 11, color: AppTheme.textHint, height: 1.5),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await BaiduAsr.clearConfig();
+              if (ctx.mounted) Navigator.of(ctx).pop('cleared');
+            },
+            child: Text('清除',
+                style: TextStyle(color: AppTheme.error)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('取消', style: TextStyle(color: AppTheme.textSub)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('save'),
+            child: Text('保存', style: TextStyle(color: AppTheme.accent)),
+          ),
+        ],
+      ),
+    );
+    if (result == 'save') {
+      await BaiduAsr.saveConfig(
+        appId: appId.text,
+        apiKey: apiKey.text,
+        secretKey: secretKey.text,
+        enabled: _asrEnabled,
+      );
+      _refreshAsr();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已保存，可在播放页体验文稿转写')),
+        );
+      }
+    } else if (result == 'cleared') {
+      _refreshAsr();
+    }
+  }
+
+  InputDecoration _asrInputDeco(String label) => InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(fontSize: 13, color: AppTheme.textSub),
+        hintStyle: TextStyle(fontSize: 13, color: AppTheme.textHint),
+        filled: true,
+        fillColor: AppTheme.surfaceHigh,
+        isDense: true,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: AppTheme.divider),
+        ),
+      );
+
+  void _refreshAsr() {
+    BaiduAsr.loadConfig().then((c) {
+      if (!mounted) return;
+      setState(() {
+        _asrAppId = c.appId;
+        _asrApiKey = c.apiKey;
+        _asrSecretKey = c.secretKey;
+        _asrEnabled = c.enabled;
+      });
+    });
   }
 
   Widget _sectionTitle(String text) {

@@ -9,6 +9,7 @@ import '../core/theme/app_theme.dart';
 import '../models/book.dart';
 import '../player/book_player.dart';
 import '../services/local_library.dart';
+import '../services/baidu_asr.dart';
 import '../services/lyrics_parser.dart';
 import '../widgets/book_cover.dart';
 import 'player_page.dart';
@@ -247,6 +248,120 @@ class _LocalBookDetailPageState extends State<LocalBookDetailPage> {
     if (!mounted) return;
     setState(() => _book = updated);
     await _persist();
+  }
+
+  /// 章节文稿入口：导入文件 / 百度语音转写
+  Future<void> _lyricsAction(int index) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading:
+                  Icon(Icons.description_outlined, color: AppTheme.accent),
+              title: Text('导入文稿文件（txt / lrc / srt）',
+                  style: TextStyle(fontSize: 14, color: AppTheme.textMain)),
+              onTap: () => Navigator.of(ctx).pop('file'),
+            ),
+            ListTile(
+              leading: Icon(Icons.translate_rounded, color: AppTheme.accent),
+              title: Text('百度语音转写生成文稿',
+                  style: TextStyle(fontSize: 14, color: AppTheme.textMain)),
+              subtitle: Text(
+                '需要先在「系统设置 → 语音转写（百度）」填写凭证',
+                style: TextStyle(fontSize: 11, color: AppTheme.textSub),
+              ),
+              onTap: () => Navigator.of(ctx).pop('baidu'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == 'file') {
+      await _pickLyrics(index);
+    } else if (action == 'baidu') {
+      await _transcribeChapter(index);
+    }
+  }
+
+  /// 百度语音转写当前章节：提交 → 轮询 → 写入文稿文件
+  Future<void> _transcribeChapter(int index) async {
+    final ch = _book.chapters![index];
+    final localPath = ch.localPath;
+    if (localPath == null || localPath.isEmpty) return;
+    final cfg = await BaiduAsr.loadConfig();
+    final messenger = ScaffoldMessenger.of(context);
+    if (!cfg.isConfigured || !cfg.enabled) {
+      messenger.showSnackBar(
+        const SnackBar(
+            content: Text('未配置百度语音转写，请先到「系统设置 → 语音转写（百度）」填写凭证并开启自动转写'),
+            duration: Duration(seconds: 4)),
+      );
+      return;
+    }
+    var stage = '准备转写…';
+    if (!mounted) return;
+    // 进度弹窗（用 StatefulBuilder 让 stage 文案可刷新）
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setStageState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(stage,
+                    style:
+                        TextStyle(fontSize: 14, color: AppTheme.textMain)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final lines = await BaiduAsr.transcribe(
+      File(localPath),
+      apiKey: cfg.apiKey,
+      secretKey: cfg.secretKey,
+      onStage: (s) => stage = s,
+    );
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop(); // 关闭进度弹窗
+    }
+    if (lines == null || lines.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('转写失败，请检查凭证/网络/免费额度'),
+            duration: Duration(seconds: 3)),
+      );
+      return;
+    }
+    try {
+      await LyricsParser.saveLyricsFile(File(localPath), lines);
+      if (!mounted) return;
+      setState(() {});
+      messenger.showSnackBar(SnackBar(
+        content: Text('文稿转写完成（${lines.length} 句），播放页歌词可查看'),
+        duration: const Duration(seconds: 3),
+      ));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(
+        content: Text('文稿保存失败：$e'),
+        duration: const Duration(seconds: 3),
+      ));
+    }
   }
 
   /// 为章节导入文稿（txt / lrc / srt）：
@@ -505,7 +620,7 @@ class _LocalBookDetailPageState extends State<LocalBookDetailPage> {
                                   ? AppTheme.accent
                                   : AppTheme.textHint,
                             ),
-                            onPressed: () => _pickLyrics(i),
+                            onPressed: () => _lyricsAction(i),
                           );
                         }),
                       const SizedBox(width: 4),
