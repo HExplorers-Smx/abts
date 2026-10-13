@@ -193,16 +193,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: 发布 GitHub Release
+      - name: 发布 GitHub Release（push 自动发布，供 App 内「检查更新」下载）
+        if: ${{ github.event_name == 'push' || steps.params.outputs.release == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          if [ "${{ steps.params.outputs.release }}" != "true" ]; then
-            echo "未勾选 release 选项（push 自动构建默认不发布 Release），跳过"
-            exit 0
-          fi
-          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          VERSION="$APP_VERSION"
           TAG="v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "==> Release $TAG 已存在，上传/覆盖资产"
@@ -211,7 +208,7 @@ jobs:
             echo "==> 创建 Release $TAG"
             gh release create "$TAG" dist/*.apk \
               --title "v${VERSION}" \
-              --notes "由「构建 APK（可选架构）」工作流自动发布。勾选 release 后构建，App 内「检查更新」会检测到该版本。"
+              --notes "由「构建 APK（可选架构）」工作流自动发布（每次推送 main 自动构建并发布，构建号=git 提交数，单调递增）。App 内「检查更新」会检测到该版本。"
           fi
           echo "已发布：https://github.com/HExplorers-Smx/abts/releases/tag/$TAG"
 
@@ -223,10 +220,10 @@ jobs:
           echo "## 构建完成 ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- 触发方式：\`$TRIGGER\`（push 自动构建 / manual 手动构建）" >> $GITHUB_STEP_SUMMARY
-          echo "- 版本：\`$(grep '^version:' pubspec.yaml | awk '{print $2}')\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 版本：\`$APP_VERSION\`（构建号=$APP_VERSION 末尾段，单调递增）" >> $GITHUB_STEP_SUMMARY
           echo "- 构建类型：\`$BUILD_TYPE\`" >> $GITHUB_STEP_SUMMARY
           echo "- 已打包：\`$(ls dist | tr '\n' ' ')\`" >> $GITHUB_STEP_SUMMARY
           echo "- 下载：本页底部 **Artifacts** 区点击 \`abts-apk-$BUILD_TYPE\` 下载" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.params.outputs.release }}" = "true" ]; then
-            echo "- 已发布 Release：https://github.com/HExplorers-Smx/abts/releases/tag/v$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.params.outputs.release }}" = "true" ] || [ "${{ github.event_name }}" = "push" ]; then
+            echo "- 已发布 Release：https://github.com/HExplorers-Smx/abts/releases/tag/v$APP_VERSION" >> $GITHUB_STEP_SUMMARY
           fi
