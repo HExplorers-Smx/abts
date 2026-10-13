@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
-import '../models/lyric_line.dart';
 import 'lyrics_parser.dart';
 
 /// 音乐歌词自动匹配（网易云）。
