@@ -80,6 +80,9 @@ class _LyricsViewState extends State<LyricsView>
   /// 文本行高测量缓存（文本 + 宽度 -> 高度）
   final Map<String, double> _heightCache = {};
 
+  /// 加权逐字时间起点缓存（标点停顿感知，按行文本缓存）
+  final Map<String, List<double>> _charStartCache = {};
+
   // ---------- 轨道滚动（folia：弹簧跟随 + 手动浏览 + idle 复位） ----------
   late final AnimationController _scrollCtrl =
       AnimationController.unbounded(vsync: this)
@@ -109,9 +112,9 @@ class _LyricsViewState extends State<LyricsView>
     widget.player.addListener(_onPlayerChanged);
     // 读取用户设置里的全局歌词偏移（folia lyricOffsetMemory 的简化版）
     SharedPreferences.getInstance().then((p) {
-      final v = p.getDouble('lyrics_offset_ms');
+      final v = p.getInt('lyrics_offset_ms');
       if (!mounted) return;
-      setState(() => _offsetMs = v ?? 0);
+      setState(() => _offsetMs = (v ?? 0).toDouble());
     });
   }
 
@@ -296,6 +299,76 @@ class _LyricsViewState extends State<LyricsView>
     widget.player.seek(line.startDuration);
   }
 
+  /// 长按歌词：现场微调同步偏移（边听边调，±50ms 一档，全局保存）
+  Future<void> _showOffsetAdjuster() async {
+    var value = _offsetMs.toInt();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: Text('歌词同步偏移',
+              style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                value == 0
+                    ? '对齐（0 ms）'
+                    : value > 0
+                        ? '提前 $value ms'
+                        : '延后 ${-value} ms',
+                style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.accent),
+              ),
+              const SizedBox(height: 12),
+              Slider(
+                value: value.toDouble(),
+                min: -1500,
+                max: 1500,
+                divisions: 60,
+                activeColor: AppTheme.accent,
+                inactiveColor: AppTheme.divider,
+                label: '$value ms',
+                onChanged: (v) {
+                  value = (v / 50).round() * 50;
+                  setDialogState(() {});
+                },
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '歌词比声音快 → 往正调；\n歌词比声音慢 → 往负调。±50ms 一档，边听边试。',
+                style: TextStyle(
+                    fontSize: 11, color: AppTheme.textHint, height: 1.5),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                value = 0;
+                setDialogState(() {});
+              },
+              child: Text('重置', style: TextStyle(color: AppTheme.textSub)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('保存', style: TextStyle(color: AppTheme.accent)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (value != _offsetMs.toInt()) {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt('lyrics_offset_ms', value);
+      if (!mounted) return;
+      setState(() => _offsetMs = value.toDouble());
+    }
+  }
+
   // ---------- 样式 ----------
   TextStyle _textStyle({bool active = false}) => TextStyle(
         fontSize: _fontSize,
@@ -375,6 +448,7 @@ class _LyricsViewState extends State<LyricsView>
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: widget.onToggleCover,
+          onLongPress: _showOffsetAdjuster,
           onVerticalDragUpdate: _onManualDragUpdate,
           onVerticalDragEnd: _onManualDragEnd,
           child: ClipRect(
@@ -510,13 +584,16 @@ class _LyricsViewState extends State<LyricsView>
     final text = line.text;
     final t = _t;
     final n = text.length;
-    final charDur = line.duration / math.max(n, 1);
+    // 加权逐字时间起点：标点前的字分配更长（朗读会在标点处停顿），
+    // 长句的扫字节奏比"纯均分"更贴语感（folia 对无逐字 timing 的
+    // 数据也做感知分配，而不是机械均分）
+    final starts = _weightedStarts(line);
     // 行渲染结束时间：至少本行 end+1.05s，且不早于下一句开始（folia renderEndTime）
     final lineEnd = line.end + 1.05;
     final spans = <TextSpan>[];
     for (var i = 0; i < n; i++) {
-      final s = line.start + charDur * i;
-      final e = i == n - 1 ? line.end : line.start + charDur * (i + 1);
+      final s = starts[i];
+      final e = starts[i + 1];
       final glow = _charGlow(t, s, e, lineEnd);
       final status =
           (t < s ? 0 : (t < e ? (t - s) / math.max(0.001, e - s) : 1))
@@ -569,6 +646,34 @@ class _LyricsViewState extends State<LyricsView>
   /// 唱过的字使用的主题亮色（介于白与主题色之间，folia wordColor 的移植）
   Color get _sungColor =>
       Color.lerp(_brightColor, _glowAccent, 0.5) ?? _brightColor;
+
+  /// 加权逐字时间起点（长度 = 字数+1，末位 = 行结束）：
+  /// 标点前的字符分配更长时长（朗读停顿），其余字符均分。
+  /// 计算一次按行缓存，避免每帧重复。
+  List<double> _weightedStarts(LyricLine line) {
+    final text = line.text;
+    final n = text.length;
+    final key = '${line.start}|$text';
+    return _charStartCache.putIfAbsent(key, () {
+      const pausePunct = '，。！？；：、,.!?;:…—～';
+      final weights = List<double>.filled(n, 1.0);
+      for (var i = 0; i < n; i++) {
+        if (i > 0 && pausePunct.contains(text[i])) {
+          weights[i - 1] = 1.6; // 标点前停顿
+        }
+      }
+      final total = weights.fold<double>(0, (a, b) => a + b);
+      final dur = line.duration;
+      final out = <double>[];
+      var acc = 0.0;
+      for (var i = 0; i < n; i++) {
+        out.add(line.start + acc);
+        acc += dur * weights[i] / total;
+      }
+      out.add(line.start + dur);
+      return out;
+    });
+  }
 
   /// 逐字辉光强度：Smoothstep 起峰 + 驻留 + 衰减（folia resolveMonetGlow 移植，
   /// tail 用行渲染结束时间，保证整行唱完前辉光不提前熄灭）
