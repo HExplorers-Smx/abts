@@ -27,6 +27,7 @@ class BaiduAsr {
   static const _prefsApiKey = 'baidu_asr_api_key';
   static const _prefsSecretKey = 'baidu_asr_secret_key';
   static const _prefsEnabled = 'baidu_asr_enabled';
+  static const _prefsLang = 'baidu_asr_lang';
 
   // ---------- 配置 ----------
 
@@ -37,6 +38,7 @@ class BaiduAsr {
       apiKey: p.getString(_prefsApiKey) ?? '',
       secretKey: p.getString(_prefsSecretKey) ?? '',
       enabled: p.getBool(_prefsEnabled) ?? false,
+      lang: p.getString(_prefsLang) ?? 'zh',
     );
   }
 
@@ -44,12 +46,14 @@ class BaiduAsr {
       {required String appId,
       required String apiKey,
       required String secretKey,
-      required bool enabled}) async {
+      required bool enabled,
+      String lang = 'zh'}) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_prefsAppId, appId.trim());
     await p.setString(_prefsApiKey, apiKey.trim());
     await p.setString(_prefsSecretKey, secretKey.trim());
     await p.setBool(_prefsEnabled, enabled);
+    await p.setString(_prefsLang, lang == 'en' ? 'en' : 'zh');
   }
 
   static Future<void> clearConfig() async {
@@ -108,13 +112,15 @@ class BaiduAsr {
       final dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 15)));
 
       onStage?.call('正在提交转写任务…');
+      final lang = (await loadConfig()).lang;
+      final pid = lang == 'en' ? 1737 : 80006; // 中文音视频字幕模型(词级) / 英文模型
       final create = await dio.post(
         '$_createUrl?access_token=$token',
         data: {
           'speech_data': b64,
           'format': format,
           'sample_rate': 16000,
-          'pid': 80006, // 中文音视频字幕模型：识别率更高、标点断句更准、返回词级时间
+          'pid': pid,
           'role_num': 1,
           // 词级时间戳开关（部分账号/模型支持；多余字段如被忽略不影响主流程）
           'enable_word_time': true,
@@ -229,11 +235,15 @@ class BaiduAsrConfig {
   final String secretKey;
   final bool enabled;
 
+  /// 转写语言：'zh' = 中文音视频字幕模型（词级时间戳）；'en' = 英文模型
+  final String lang;
+
   const BaiduAsrConfig({
     required this.appId,
     required this.apiKey,
     required this.secretKey,
     required this.enabled,
+    this.lang = 'zh',
   });
 
   bool get isConfigured =>

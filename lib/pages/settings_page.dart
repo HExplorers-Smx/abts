@@ -28,6 +28,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String _asrApiKey = '';
   String _asrSecretKey = '';
   bool _asrEnabled = false;
+  String _asrLang = 'zh';
 
   /// 歌词全局偏移（ms）：文稿时间轴与声音对不齐时手动校准
   int _lyricsOffsetMs = 0;
@@ -230,7 +231,8 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             subtitle: Text(
               _asrConfigured
-                  ? '已配置${_asrEnabled ? '，导入音频后自动转写文稿' : '，自动转写已关闭'}'
+                  ? '已配置（${_asrLang == 'en' ? '英文' : '中文·词级'}）'
+                      '${_asrEnabled ? ' · 导入音频后自动转写文稿' : ' · 自动转写已关闭'}'
                   : '未配置 · 点此填写 AppID / API Key / Secret Key',
               style: TextStyle(fontSize: 12, color: AppTheme.textSub),
             ),
@@ -247,6 +249,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       apiKey: _asrApiKey,
                       secretKey: _asrSecretKey,
                       enabled: v,
+                      lang: _asrLang,
                     );
                     _refreshAsr();
                   }
@@ -276,14 +279,15 @@ class _SettingsPageState extends State<SettingsPage> {
     final secretKey = TextEditingController(text: _asrSecretKey);
     final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: Text('百度语音转写',
-            style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: Text('百度语音转写',
+              style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
               TextField(
                 controller: appId,
                 keyboardType: TextInputType.number,
@@ -299,6 +303,26 @@ class _SettingsPageState extends State<SettingsPage> {
                 controller: secretKey,
                 decoration: _asrInputDeco('Secret Key'),
                 obscureText: true,
+              ),
+              const SizedBox(height: 14),
+              Text('音频语言',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSub,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: _langOption(ctx, setDialogState, 'zh', '中文',
+                        '音视频字幕模型，识别率 98%，转写结果带词级时间戳（逐字跟读）'),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _langOption(ctx, setDialogState, 'en', '英文',
+                        '英文识别模型；不带词级时间戳，回退整句扫字'),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               Text(
@@ -329,6 +353,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+      ),
     );
     if (result == 'save') {
       await BaiduAsr.saveConfig(
@@ -336,6 +361,7 @@ class _SettingsPageState extends State<SettingsPage> {
         apiKey: apiKey.text,
         secretKey: secretKey.text,
         enabled: _asrEnabled,
+        lang: _asrLang,
       );
       _refreshAsr();
       if (mounted) {
@@ -361,6 +387,67 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       );
 
+  /// 转写语言选择卡片（中文字幕模型词级 / 英文模型）
+  Widget _langOption(
+    BuildContext ctx,
+    void Function(VoidCallback) setDialogState,
+    String lang,
+    String title,
+    String desc,
+  ) {
+    final selected = _asrLang == lang;
+    return InkWell(
+      onTap: () => setDialogState(() => _asrLang = lang),
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          color: selected
+              ? AppTheme.accent.withValues(alpha: 0.12)
+              : AppTheme.surfaceHigh,
+          border: Border.all(
+            color: selected ? AppTheme.accent : AppTheme.divider,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  size: 16,
+                  color:
+                      selected ? AppTheme.accent : AppTheme.textHint,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? AppTheme.accent : AppTheme.textMain,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              desc,
+              style: TextStyle(
+                  fontSize: 11, color: AppTheme.textSub, height: 1.4),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _refreshAsr() {
     BaiduAsr.loadConfig().then((c) {
       if (!mounted) return;
@@ -369,6 +456,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _asrApiKey = c.apiKey;
         _asrSecretKey = c.secretKey;
         _asrEnabled = c.enabled;
+        _asrLang = c.lang;
       });
     });
   }
