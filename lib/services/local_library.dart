@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -6,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
 import '../models/chapter.dart';
+import 'lyric_matcher.dart';
 
 /// 本地音频导入：把用户选择的音频文件复制进应用目录，
 /// 包装成一本"本地书"（bvid 以 `local_` 开头），
@@ -131,6 +133,9 @@ class LocalLibrary {
           duration: 0,
           localPath: dst.path,
         ));
+        // 导入后自动匹配音乐歌词（网易云）：成功即写入同目录 .lyrics.json，
+        // 失败静默不打扰（章节页仍可手动导入文稿）
+        unawaited(LyricMatcher.matchAndSave(dst, name));
       } catch (_) {}
     }
 
