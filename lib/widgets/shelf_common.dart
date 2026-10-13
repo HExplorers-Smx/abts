@@ -4,6 +4,10 @@ import 'package:provider/provider.dart';
 import '../core/nav/home_tabs.dart';
 import '../core/storage/shelf_store.dart';
 import '../core/theme/app_theme.dart';
+import '../pages/book_detail_page.dart';
+import '../pages/player_page.dart';
+import '../player/book_player.dart';
+import '../services/local_library.dart';
 
 /// 书架进度徽标（百分比）
 class ShelfProgressBadge extends StatelessWidget {
@@ -76,6 +80,29 @@ class EmptyShelfView extends StatelessWidget {
   }
 }
 
+/// 打开书架上的书：本地导入书直达播放页（详情页依赖 B 站接口，
+/// 本地书没有 bvid 数据，进去只会报错）；在线书进详情页
+void openShelfBook(BuildContext context, ShelfBook sb) {
+  final player = context.read<BookPlayer>();
+  if (sb.book.localPath != null) {
+    player.flushProgress();
+    player.playBook(
+      sb.book,
+      resumeIndex: sb.lastChapterIndex,
+      resumeMs: sb.positionMs,
+    );
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const PlayerPage()),
+    );
+    return;
+  }
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => BookDetailPage(bvid: sb.book.bvid),
+    ),
+  );
+}
+
 /// 确认后把书移出书架（收听进度一并清除）
 Future<void> confirmRemoveFromShelf(BuildContext context, ShelfBook sb) async {
   final shelf = context.read<ShelfStore>();
@@ -105,8 +132,18 @@ Future<void> confirmRemoveFromShelf(BuildContext context, ShelfBook sb) async {
     ),
   );
   if (ok != true) return;
+  final isLocal = sb.book.localPath != null;
+  if (isLocal) {
+    await LocalLibrary.instance.deleteLocalFile(sb.book);
+  }
   await shelf.remove(sb.book.bvid);
   messenger.showSnackBar(
-    SnackBar(content: Text('已将《${sb.book.cleanTitle}》移出书架')),
+    SnackBar(
+      content: Text(
+        isLocal
+            ? '已将《${sb.book.cleanTitle}》移出书架（本地文件已删除）'
+            : '已将《${sb.book.cleanTitle}》移出书架',
+      ),
+    ),
   );
 }

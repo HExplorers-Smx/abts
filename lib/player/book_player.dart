@@ -300,17 +300,30 @@ class BookPlayer extends ChangeNotifier {
         throw StateError('章节索引越界：$index');
       }
       final chapter = _chapters[index];
+      final candidates = <String>[];
+      String? localCandidate;
+      // 本地导入书：直接播应用内文件，绝不联网（本地书没有 B 站流可拉）
+      if (_book!.localPath != null) {
+        final lp = _book!.localPath!;
+        if (await File(lp).exists()) {
+          candidates.add(lp);
+          localCandidate = lp;
+          debugPrint('[BookPlayer] 本地书，直接播放: $lp');
+        }
+      }
       // 已下载章节离线优先：直接播本地文件，绝不先发网络请求。
       // （在线取流在断网时会抛异常，绝不能让它挡住本地播放——
       //   这是"下载了还提示没网络"的根因：旧逻辑无条件先请求在线流）
-      final localPath =
-          DownloadStore.instance.localPathFor(_book!.bvid, chapter.cid);
-      final candidates = <String>[];
-      final hasLocal = localPath != null && await File(localPath).exists();
-      if (hasLocal) {
-        candidates.add(localPath);
-        debugPrint('[BookPlayer] 使用本地已下载文件: $localPath');
+      if (localCandidate == null) {
+        final localPath =
+            DownloadStore.instance.localPathFor(_book!.bvid, chapter.cid);
+        if (localPath != null && await File(localPath).exists()) {
+          candidates.add(localPath);
+          localCandidate = localPath;
+          debugPrint('[BookPlayer] 使用本地已下载文件: $localPath');
+        }
       }
+      final hasLocal = localCandidate != null;
       var networkFetched = false;
       Future<void> ensureNetworkCandidates() async {
         if (networkFetched) return;
@@ -332,7 +345,7 @@ class BookPlayer extends ChangeNotifier {
 
       for (var i = 0; i < candidates.length; i++) {
         final url = candidates[i];
-        final isLocal = hasLocal && url == localPath;
+        final isLocal = url == localCandidate;
         try {
           // 有续播位置时先打开再精确跳转，保证落点准确到秒
           await _player.open(

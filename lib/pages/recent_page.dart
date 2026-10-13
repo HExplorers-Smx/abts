@@ -6,7 +6,6 @@ import '../core/theme/app_theme.dart';
 import '../player/book_player.dart';
 import '../widgets/book_cover.dart';
 import '../widgets/shelf_common.dart';
-import 'book_detail_page.dart';
 import 'player_page.dart';
 
 /// 最近收听：按最近收听时间排序的在听列表
@@ -52,13 +51,7 @@ class _RecentTile extends StatelessWidget {
 
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => BookDetailPage(bvid: sb.book.bvid),
-          ),
-        );
-      },
+      onTap: () => openShelfBook(context, sb),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(

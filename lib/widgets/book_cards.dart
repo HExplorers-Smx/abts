@@ -11,6 +11,7 @@ class BookGridItem extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final Widget? badge;
+  final bool isLocal;
 
   const BookGridItem({
     super.key,
@@ -18,6 +19,7 @@ class BookGridItem extends StatelessWidget {
     required this.onTap,
     this.onLongPress,
     this.badge,
+    this.isLocal = false,
   });
 
   @override
@@ -34,6 +36,12 @@ class BookGridItem extends StatelessWidget {
               fit: StackFit.expand,
               children: [
                 BookCover(url: book.pic),
+                if (isLocal)
+                  const Positioned(
+                    top: 6,
+                    right: 6,
+                    child: _LocalBadge(),
+                  ),
                 if (badge != null)
                   Positioned(bottom: 6, right: 6, child: badge!),
               ],
@@ -168,3 +176,31 @@ class PlayBadge extends StatelessWidget {
     );
   }
 }
+
+/// 「本地」角标：标记本地导入的书
+class _LocalBadge extends StatelessWidget {
+  const _LocalBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.audio_file_rounded, size: 11, color: Colors.white),
+          SizedBox(width: 2),
+          Text(
+            '本地',
+            style: TextStyle(fontSize: 10, color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

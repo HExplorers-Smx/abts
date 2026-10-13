@@ -5,7 +5,6 @@ import '../core/storage/shelf_store.dart';
 import '../core/theme/app_theme.dart';
 import '../widgets/book_cards.dart';
 import '../widgets/shelf_common.dart';
-import 'book_detail_page.dart';
 
 /// 我的书架：与书架同源的独立页面
 class FavoritesPage extends StatelessWidget {
@@ -50,16 +49,11 @@ class FavoritesPage extends StatelessWidget {
                 final sb = books[i];
                 return BookGridItem(
                   book: sb.book,
+                  isLocal: sb.book.localPath != null,
                   badge: sb.positionMs > 0
                       ? ShelfProgressBadge(percent: sb.percent)
                       : null,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => BookDetailPage(bvid: sb.book.bvid),
-                      ),
-                    );
-                  },
+                  onTap: () => openShelfBook(context, sb),
                   onLongPress: () => confirmRemoveFromShelf(context, sb),
                 );
               },

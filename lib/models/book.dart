@@ -19,6 +19,9 @@ class Book {
   final int pubdate;
   final String upName;
 
+  /// 本地导入音频的绝对路径；非空表示这是一本"本地书"（bvid 以 `local_` 开头）
+  final String? localPath;
+
   final List<Chapter>? chapters;
 
   Book({
@@ -38,6 +41,7 @@ class Book {
     this.favorite = 0,
     this.pubdate = 0,
     this.upName = '',
+    this.localPath,
     this.chapters,
   });
 
@@ -138,6 +142,7 @@ class Book {
         'authorFace': authorFace,
         'desc': desc,
         'play': play,
+        if (localPath != null) 'localPath': localPath,
         if (chapters != null)
           'chapters': chapters!.map((c) => c.toJson()).toList(),
       };
@@ -156,6 +161,7 @@ class Book {
       authorFace: m['authorFace'] as String? ?? '',
       desc: m['desc'] as String? ?? '',
       play: int.tryParse('${m['play'] ?? 0}') ?? 0,
+      localPath: m['localPath'] as String?,
       chapters: rawChapters?.map(
               (e) => Chapter.fromJson((e as Map).cast<String, dynamic>()))
           .toList(),

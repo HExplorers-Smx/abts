@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../core/theme/app_theme.dart';
@@ -14,8 +16,9 @@ import '../services/download_store.dart';
 ///
 /// 还原要点（参数取自 folia-major 源码）：
 /// - 当前行居中高亮，其余行按距离缩小 / 变暗 / 模糊（resolveLineTone 的移植）；
-/// - 当前行从左到右扫字填充 + 辉光（resolveMonetFillWidth / resolveMonetGlow 的移植）；
-/// - 上下渐隐遮罩，行位置用弹簧式缓动平滑滚动；
+/// - 当前行逐字扫字点亮 + 柔化前缘 + 辉光（resolveMonetFillWidth / resolveMonetGlow / mask 的移植）；
+/// - 上下渐隐遮罩；整轨用 SpringSimulation 弹簧滚动（folia MONET_SCROLL_SPRING）；
+/// - 支持手动上下拖动浏览歌词，1.8s 无操作自动回到跟随（folia idle reset）；
 /// - 点击歌词行跳转播放，点击空白区域切回封面。
 class LyricsView extends StatefulWidget {
   const LyricsView({super.key, required this.player, this.onToggleCover});
@@ -32,14 +35,23 @@ class _LyricsViewState extends State<LyricsView>
   // ---------- 布局/动效参数（对应 folia monetRailLayout / monetLyricMotion） ----------
   static const double _fontSize = 17;
   static const double _lineHeight = 1.4;
-  static const double _activeGap = 18;
+  // 行距统一用 inactiveGap（folia 的 active/inactive 双间距在默认字号下相差仅 4px，
+  // 统一间距让轨道坐标与 active 无关，换行时不跳变）
   static const double _inactiveGap = 14;
   static const int _visibleBefore = 4;
   static const int _visibleAfter = 4;
   static const double _glowPad = 8;
   static const double _inactiveScale = 0.85; // ≈ inactiveFontPx / lyricFontPx
-  static const Duration _scrollDuration = Duration(milliseconds: 480);
-  static const Curve _scrollCurve = Curves.easeOutCubic;
+  // folia MONET_SCROLL_SPRING：过阻尼弹簧（无回弹、平滑趋近）
+  static const SpringDescription _spring = SpringDescription(
+    mass: 0.82,
+    stiffness: 142,
+    damping: 28,
+  );
+  /// 手动滚动后无操作多久自动回到跟随模式（folia MONET_SCROLL_IDLE_RESET_MS）
+  static const Duration _idleReset = Duration(milliseconds: 1800);
+  /// 手动滚动最大范围（像素，上下约各 4 屏歌词）
+  static const double _manualClampPx = 1200;
 
   // ---------- 状态 ----------
   late final Ticker _ticker;
@@ -59,6 +71,22 @@ class _LyricsViewState extends State<LyricsView>
   /// 逐字 x 位置缓存（当前行扫字用）
   final Map<String, List<double>> _offsetCache = {};
 
+  // ---------- 轨道滚动（folia：弹簧跟随 + 手动浏览 + idle 复位） ----------
+  late final AnimationController _scrollCtrl =
+      AnimationController.unbounded(vsync: this)
+        ..addListener(_onScrollValue);
+  late final AnimationController _manualCtrl =
+      AnimationController.unbounded(vsync: this)
+        ..addListener(_onManualValue);
+
+  /// 跟随滚动的当前偏移（弹簧驱动，目标 = 让当前行中心到焦点线）
+  double _offsetY = 0;
+  /// 手动浏览偏移（垂直拖动产生，idle 后弹簧归零）
+  double _manualPx = 0;
+  /// 当前跟随目标（避免对同一目标重复启动弹簧）
+  double _scrollTarget = double.nan;
+  Timer? _manualTimer;
+
   // ---------- 生命周期 ----------
   @override
   void initState() {
@@ -75,9 +103,50 @@ class _LyricsViewState extends State<LyricsView>
   @override
   void dispose() {
     _ticker.dispose();
+    _manualTimer?.cancel();
+    _scrollCtrl.dispose();
+    _manualCtrl.dispose();
     widget.player.positionTick.removeListener(_onPosition);
     widget.player.removeListener(_onPlayerChanged);
     super.dispose();
+  }
+
+  // ---------- 轨道滚动 ----------
+  void _onScrollValue() {
+    _offsetY = _scrollCtrl.value;
+    if (mounted) setState(() {});
+  }
+
+  void _onManualValue() {
+    _manualPx = _manualCtrl.value;
+    if (mounted) setState(() {});
+  }
+
+  /// 弹簧滚到目标偏移（folia MONET_SCROLL_SPRING）
+  void _animateOffset(double target) {
+    _scrollCtrl.animateWith(
+      SpringSimulation(_spring, _offsetY, target, 0),
+    );
+  }
+
+  /// 手动浏览：拖动时累加偏移，超过 idle 时长后自动复位跟随
+  void _onManualDragUpdate(DragUpdateDetails d) {
+    _manualPx =
+        (_manualPx + d.delta.dy).clamp(-_manualClampPx, _manualClampPx);
+    _manualTimer?.cancel();
+    _manualTimer = Timer(_idleReset, _resetManual);
+    if (mounted) setState(() {});
+  }
+
+  void _onManualDragEnd(DragEndDetails d) {
+    _manualTimer?.cancel();
+    _manualTimer = Timer(_idleReset, _resetManual);
+  }
+
+  void _resetManual() {
+    _manualTimer?.cancel();
+    _manualTimer = null;
+    _manualCtrl.animateWith(SpringSimulation(_spring, _manualPx, 0, 0));
   }
 
   void _onPlayerChanged() {
@@ -130,6 +199,15 @@ class _LyricsViewState extends State<LyricsView>
 
   Future<void> _fetch(String key, String bvid, int cid) async {
     try {
+      // 本地导入的书没有 B 站文稿，也不调 AI 字幕接口（bvid 无效会白白报错）
+      if (bvid.startsWith('local_')) {
+        if (!mounted || _loadedKey != key) return;
+        setState(() {
+          _lines = <LyricLine>[];
+          _loading = false;
+        });
+        return;
+      }
       // 本地优先：已下载章节直接读随音频落盘的文稿文件（离线可用）
       List<LyricLine>? lines;
       try {
@@ -222,18 +300,40 @@ class _LyricsViewState extends State<LyricsView>
         final railW = constraints.maxWidth;
         final railH = constraints.maxHeight;
         final active = _activeIndexFor(lines, _timeSec);
-        final first = math.max(0, active - _visibleBefore);
-        final last = math.min(lines.length - 1, active + _visibleAfter);
         final maxTextW = math.max(railW - 24, 80).toDouble();
 
+        // 全量行高（≤40 行，走测量缓存）
         final hs = <double>[];
-        for (var i = first; i <= last; i++) {
-          hs.add(_measureHeight(lines[i].text, maxTextW) + _glowPad * 2);
+        for (final l in lines) {
+          hs.add(_measureHeight(l.text, maxTextW) + _glowPad * 2);
         }
+        // 绝对坐标：从第 0 行顶排起，与 active 无关 → 换行时内容不跳变，
+        // 整轨由弹簧 translate 平滑滚动（folia 轨道方案）
+        final absTop = <double>[];
+        var acc = 0.0;
+        for (var i = 0; i < lines.length; i++) {
+          absTop.add(acc);
+          if (i < lines.length - 1) acc += hs[i] + _inactiveGap;
+        }
+        // 跟随目标：当前行中心落在焦点线（railH * 0.46）
+        final target = railH * 0.46 - (absTop[active] + hs[active] / 2);
+        if (_scrollTarget.isNaN) {
+          // 首帧直接落位，避免入场弹跳
+          _scrollTarget = target;
+          _offsetY = target;
+        } else if (target != _scrollTarget) {
+          _scrollTarget = target;
+          _animateOffset(target);
+        }
+        final totalTranslate = _offsetY + _manualPx;
+        final first = math.max(0, active - _visibleBefore);
+        final last = math.min(lines.length - 1, active + _visibleAfter);
 
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: widget.onToggleCover,
+          onVerticalDragUpdate: _onManualDragUpdate,
+          onVerticalDragEnd: _onManualDragEnd,
           child: ClipRect(
             child: ShaderMask(
               shaderCallback: (rect) => const LinearGradient(
@@ -251,19 +351,21 @@ class _LyricsViewState extends State<LyricsView>
               child: SizedBox(
                 width: railW,
                 height: railH,
-                child: Stack(
-                  children: [
-                    for (var i = first; i <= last; i++)
-                      _buildLine(
-                        i,
-                        lines,
-                        active,
-                        first,
-                        hs[i - first],
-                        _topFor(i, active, first, hs, railH),
-                        maxTextW,
-                      ),
-                  ],
+                child: Transform.translate(
+                  offset: Offset(0, totalTranslate),
+                  child: Stack(
+                    children: [
+                      for (var i = first; i <= last; i++)
+                        _buildLine(
+                          i,
+                          lines,
+                          active,
+                          absTop[i] - absTop[first],
+                          hs[i],
+                          maxTextW,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -273,34 +375,12 @@ class _LyricsViewState extends State<LyricsView>
     );
   }
 
-  /// 行的垂直位置：当前行居中（焦点略偏上，folia focusCenterY ≈ 0.46），
-  /// 其余行按行高与间距依次排布
-  /// [hs] 是窗口 [first..last] 的相对行高列表
-  double _topFor(int i, int active, int first, List<double> hs, double railH) {
-    final centerY = railH * 0.46;
-    final activeH = hs[active - first];
-    if (i == active) return centerY - activeH / 2;
-    if (i > active) {
-      double y = centerY - activeH / 2 + activeH + _activeGap;
-      for (var k = active + 1; k < i; k++) {
-        y += hs[k - first] + _inactiveGap;
-      }
-      return y;
-    }
-    double y = centerY - activeH / 2 - _activeGap - hs[i - first];
-    for (var k = i + 1; k < active; k++) {
-      y -= hs[k - first] + _inactiveGap;
-    }
-    return y;
-  }
-
   Widget _buildLine(
     int i,
     List<LyricLine> lines,
     int active,
-    int first,
-    double h,
     double top,
+    double h,
     double maxTextW,
   ) {
     final isActive = i == active;
@@ -308,9 +388,7 @@ class _LyricsViewState extends State<LyricsView>
     final tone = _resolveTone(isActive, i > active, d);
     final line = lines[i];
 
-    return AnimatedPositioned(
-      duration: _scrollDuration,
-      curve: _scrollCurve,
+    return Positioned(
       top: top,
       left: 12,
       right: 12,
