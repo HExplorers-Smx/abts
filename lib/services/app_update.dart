@@ -143,12 +143,26 @@ class AppUpdate {
     'https://gh-proxy.com/',
   ];
 
+  /// 检查本地是否已下载完整 APK（文件存在且非空即视为已下载）。
+  /// 返回路径或 null，供「检查更新」时避免重复下载。
+  static Future<String?> downloadedApk(String version) async {
+    final p = await apkSavePath(version);
+    final f = File(p);
+    if (f.existsSync() && f.lengthSync() > 0) return p;
+    return null;
+  }
+
   static Future<String> downloadApk({
     required String url,
     required String savePath,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {
+    final existing = File(savePath);
+    if (existing.existsSync() && existing.lengthSync() > 0) {
+      // 上次已下载完整，直接复用，避免重复下载浪费流量
+      return savePath;
+    }
     final candidates = <String>[
       for (final m in _downloadMirrors) '$m$url',
       url, // 兜底：镜像全部失败后回退官方直连
@@ -156,10 +170,9 @@ class AppUpdate {
     Object? lastErr;
     for (final target in candidates) {
       try {
-        final file = File(savePath);
-        if (file.existsSync()) {
+        if (existing.existsSync()) {
           // 上次未下完的半成品先清掉，避免拼坏文件
-          await file.delete();
+          await existing.delete();
         }
         await Dio(BaseOptions(connectTimeout: const Duration(seconds: 12)))
             .download(
@@ -178,6 +191,10 @@ class AppUpdate {
         return savePath;
       } catch (e) {
         lastErr = e;
+        // 下载失败清掉残留半成品，避免下次误判为已下载
+        try {
+          if (existing.existsSync()) await existing.delete();
+        } catch (_) {}
       }
     }
     throw lastErr!;

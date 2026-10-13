@@ -454,6 +454,10 @@ class MyPage extends StatelessWidget {
       return;
     }
     final apk = result.apkUrl ?? '';
+    final version = result.latestVersion ?? AppMeta.version;
+    // 本地可能已下载过该版本：不再重复下载，直接进入安装
+    final localApk = await AppUpdate.downloadedApk(version);
+    if (!context.mounted) return;
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -474,6 +478,14 @@ class MyPage extends StatelessWidget {
                 style: TextStyle(
                     fontSize: 13, color: AppTheme.textSub),
               ),
+              if (localApk != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '安装包已下载，点「立即安装」直接安装，无需重新下载',
+                  style: TextStyle(
+                      fontSize: 12, color: AppTheme.accent, height: 1.5),
+                ),
+              ],
               if ((result.changelog ?? '').isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -493,23 +505,35 @@ class MyPage extends StatelessWidget {
           if (apk.isNotEmpty)
             TextButton(
               onPressed: () {
-                final version = result.latestVersion ?? AppMeta.version;
                 Navigator.of(ctx).pop();
-                _downloadAndInstall(context, apk, version);
+                _downloadAndInstall(context, apk, version, localApk: localApk);
               },
-              child: const Text('立即更新', style: TextStyle(color: AppTheme.accent)),
+              child: Text(
+                localApk != null ? '立即安装' : '立即更新',
+                style: TextStyle(color: AppTheme.accent),
+              ),
             ),
         ],
       ),
     );
   }
 
-  /// 内置下载更新 APK：进度弹窗 → 落盘 → 拉起系统安装器（不再复制链接）
+  /// 内置下载更新 APK：进度弹窗 → 落盘 → 拉起系统安装器（不再复制链接）。
+  /// 传 [localApk] 表示本地已有完整安装包，跳过下载直接安装。
   Future<void> _downloadAndInstall(
-      BuildContext context, String apkUrl, String version) async {
+    BuildContext context,
+    String apkUrl,
+    String version, {
+    String? localApk,
+  }) async {
     final messenger = ScaffoldMessenger.of(context);
-    final savePath = await AppUpdate.apkSavePath(version);
+    final savePath = localApk ?? await AppUpdate.apkSavePath(version);
     if (!context.mounted) return;
+
+    if (localApk != null) {
+      await _launchInstaller(savePath, messenger);
+      return;
+    }
 
     var received = 0;
     var total = 0;
@@ -568,26 +592,7 @@ class MyPage extends StatelessWidget {
       );
       if (!context.mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // 关闭进度弹窗
-      // 调起系统安装器完成安装
-      const channel = MethodChannel('abts/installer');
-      final ok = await channel
-              .invokeMethod<bool>('installApk', {'path': savePath}) ??
-          false;
-      if (ok) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('安装包已就绪，请按系统提示完成安装'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      } else {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('自动安装未成功，请检查是否允许安装未知来源应用'),
-            duration: Duration(seconds: 4),
-          ),
-        );
-      }
+      await _launchInstaller(savePath, messenger);
     } catch (e) {
       debugPrint('[MyPage] 更新下载失败: $e');
       if (context.mounted) {
@@ -597,6 +602,30 @@ class MyPage extends StatelessWidget {
         SnackBar(
           content: Text('更新下载失败：$e'),
           duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  /// 拉起系统安装器安装本地 APK
+  Future<void> _launchInstaller(
+      String savePath, ScaffoldMessengerState messenger) async {
+    const channel = MethodChannel('abts/installer');
+    final ok = await channel
+            .invokeMethod<bool>('installApk', {'path': savePath}) ??
+        false;
+    if (ok) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('安装包已就绪，请按系统提示完成安装'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('自动安装未成功，请检查是否允许安装未知来源应用'),
+          duration: Duration(seconds: 4),
         ),
       );
     }
