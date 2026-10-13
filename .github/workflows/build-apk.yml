@@ -59,6 +59,42 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
+      # push 触发时自动递增版本号（pubspec 语义号+构建号、AppMeta 同步），
+      # 提交回 main 后再用新版本号构建；commit 带 [skip ci] 防止再次触发本工作流。
+      # 效果：以后每次推送都会自动产出新版本号的 APK，无需手工刷。
+      - name: 自动递增版本号（仅 push 触发）
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          set -e
+          python3 - <<'PY'
+          import os, re
+          p = 'pubspec.yaml'
+          s = open(p, encoding='utf-8').read()
+          m = re.search(r'^version:\s*(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?', s, re.M)
+          if not m:
+              print('::warning::pubspec.yaml 未找到 version 字段，跳过自动递增')
+              raise SystemExit(0)
+          ma, mi, pa = m.group(1), m.group(2), m.group(3)
+          bld = int(m.group(4) or 0)
+          sem = f'{ma}.{mi}.{int(pa) + 1}'
+          ver = f'{sem}+{bld + 1}'
+          s2 = re.sub(r'^version:\s*\S+', f'version: {ver}', s, count=1, flags=re.M)
+          open(p, 'w', encoding='utf-8', newline='').write(s2)
+          a = 'lib/core/app_meta.dart'
+          t = open(a, encoding='utf-8').read()
+          t2 = re.sub(r"static const String version = '[^']*';",
+                      f"static const String version = '{sem}';", t, count=1)
+          open(a, 'w', encoding='utf-8', newline='').write(t2)
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'NEW_VERSION={ver}\n')
+          print(f'版本号 {m.group(0).split()[-1]} → {ver}')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml lib/core/app_meta.dart
+          git commit -m "chore: 自动递增版本号至 $NEW_VERSION [skip ci]" || echo "版本号无变化，跳过提交"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+
       # workflow_dispatch 的 inputs 只在手动触发时存在；push 触发时为空，
       # 这里统一解析：push 用默认参数（release + 主流两种架构，不自动发版），
       # 手动触发用勾选值。
