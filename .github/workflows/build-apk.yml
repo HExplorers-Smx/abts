@@ -1,9 +1,13 @@
 name: 构建 APK（可选架构）
 
-# 手动触发：Actions → 本工作流 → Run workflow
-# 勾选需要的架构后即可在 GitHub 上构建 APK，构建完成后在本页下方
-# Artifacts 里下载对应安装包。
+# 两种触发方式：
+# 1. 推送 main 分支 → 自动构建 release（arm64-v8a + armeabi-v7a），
+#    完成后可在本页下方 Artifacts 下载安装包；
+# 2. 手动触发：Actions → 本工作流 → Run workflow，可勾选架构/构建类型/
+#    是否发布 GitHub Release。
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       build_type:
@@ -55,6 +59,29 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
+      # workflow_dispatch 的 inputs 只在手动触发时存在；push 触发时为空，
+      # 这里统一解析：push 用默认参数（release + 主流两种架构，不自动发版），
+      # 手动触发用勾选值。
+      - name: 解析构建参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "build_type=release" >> "$GITHUB_OUTPUT"
+            echo "arm64=true" >> "$GITHUB_OUTPUT"
+            echo "armeabi=true" >> "$GITHUB_OUTPUT"
+            echo "x86=false" >> "$GITHUB_OUTPUT"
+            echo "fat=false" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_type=${{ inputs.build_type }}" >> "$GITHUB_OUTPUT"
+            echo "arm64=${{ inputs.arm64_v8a }}" >> "$GITHUB_OUTPUT"
+            echo "armeabi=${{ inputs.armeabi_v7a }}" >> "$GITHUB_OUTPUT"
+            echo "x86=${{ inputs.x86_64 }}" >> "$GITHUB_OUTPUT"
+            echo "fat=${{ inputs.fat }}" >> "$GITHUB_OUTPUT"
+            echo "release=${{ inputs.release }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "触发方式=${{ github.event_name }} 架构=arm64:$arm64,armeabi:$armeabi,x86:$x86,fat:$fat 发版=$release"
+
       - name: 安装 JDK 17
         uses: actions/setup-java@v4
         with:
@@ -93,14 +120,14 @@ jobs:
           echo "构建修复已应用（jcenter / 动态版本 / JVM 目标 / 重复类声明）"
 
       - name: 校验至少选择一个架构
-        if: ${{ inputs.arm64_v8a == 'false' && inputs.armeabi_v7a == 'false' && inputs.x86_64 == 'false' && inputs.fat == 'false' }}
+        if: ${{ steps.params.outputs.arm64 == 'false' && steps.params.outputs.armeabi == 'false' && steps.params.outputs.x86 == 'false' && steps.params.outputs.fat == 'false' }}
         run: |
           echo "::error::请至少勾选一个架构（arm64-v8a / armeabi-v7a / x86_64 / fat）"
           exit 1
 
       - name: 构建 APK
         env:
-          BUILD_TYPE: ${{ inputs.build_type }}
+          BUILD_TYPE: ${{ steps.params.outputs.build_type }}
         run: |
           set -e
           MODE="--release"
@@ -110,7 +137,7 @@ jobs:
             -Porg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m" \
             -Pkotlin.daemon.jvmargs="-Xmx2g" \
             -Porg.gradle.workers.max=2
-          if [ "${{ inputs.fat }}" = "true" ]; then
+          if [ "${{ steps.params.outputs.fat }}" = "true" ]; then
             echo "==> flutter build apk $MODE (fat)"
             flutter build apk "$MODE" \
               -Porg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=256m" \
@@ -120,7 +147,7 @@ jobs:
 
       - name: 整理产物
         env:
-          BUILD_TYPE: ${{ inputs.build_type }}
+          BUILD_TYPE: ${{ steps.params.outputs.build_type }}
         run: |
           set -e
           SRC="build/app/outputs/flutter-apk"
@@ -132,17 +159,17 @@ jobs:
             cp "$f" "dist/$name"
             echo "已打包 $name ($(du -h "$f" | cut -f1))"
           }
-          [ "${{ inputs.arm64_v8a }}" = "true" ] && cp_abi arm64-v8a abts-arm64-v8a.apk
-          [ "${{ inputs.armeabi_v7a }}" = "true" ] && cp_abi armeabi-v7a abts-armeabi-v7a.apk
-          [ "${{ inputs.x86_64 }}" = "true" ] && cp_abi x86_64 abts-x86_64.apk
-          [ "${{ inputs.fat }}" = "true" ] && cp "$SRC/app-${BUILD_TYPE}.apk" "dist/abts-fat.apk"
+          [ "${{ steps.params.outputs.arm64 }}" = "true" ] && cp_abi arm64-v8a abts-arm64-v8a.apk
+          [ "${{ steps.params.outputs.armeabi }}" = "true" ] && cp_abi armeabi-v7a abts-armeabi-v7a.apk
+          [ "${{ steps.params.outputs.x86 }}" = "true" ] && cp_abi x86_64 abts-x86_64.apk
+          [ "${{ steps.params.outputs.fat }}" = "true" ] && cp "$SRC/app-${BUILD_TYPE}.apk" "dist/abts-fat.apk"
           echo "---- dist ----"
           ls -la dist
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
-          name: abts-apk-${{ inputs.build_type }}
+          name: abts-apk-${{ steps.params.outputs.build_type }}
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -152,8 +179,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          if [ "${{ inputs.release }}" != "true" ]; then
-            echo "未勾选 release 选项，跳过发布"
+          if [ "${{ steps.params.outputs.release }}" != "true" ]; then
+            echo "未勾选 release 选项（push 自动构建默认不发布 Release），跳过"
             exit 0
           fi
           VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
@@ -170,13 +197,17 @@ jobs:
           echo "已发布：https://github.com/HExplorers-Smx/abts/releases/tag/$TAG"
 
       - name: 汇总构建信息
+        env:
+          BUILD_TYPE: ${{ steps.params.outputs.build_type }}
+          TRIGGER: ${{ github.event_name }}
         run: |
           echo "## 构建完成 ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 触发方式：\`$TRIGGER\`（push 自动构建 / manual 手动构建）" >> $GITHUB_STEP_SUMMARY
           echo "- 版本：\`$(grep '^version:' pubspec.yaml | awk '{print $2}')\`" >> $GITHUB_STEP_SUMMARY
-          echo "- 构建类型：\`${{ inputs.build_type }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 构建类型：\`$BUILD_TYPE\`" >> $GITHUB_STEP_SUMMARY
           echo "- 已打包：\`$(ls dist | tr '\n' ' ')\`" >> $GITHUB_STEP_SUMMARY
-          echo "- 下载：本页底部 **Artifacts** 区点击 \`abts-apk-${{ inputs.build_type }}\` 下载" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.release }}" = "true" ]; then
+          echo "- 下载：本页底部 **Artifacts** 区点击 \`abts-apk-$BUILD_TYPE\` 下载" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.params.outputs.release }}" = "true" ]; then
             echo "- 已发布 Release：https://github.com/HExplorers-Smx/abts/releases/tag/v$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)" >> $GITHUB_STEP_SUMMARY
           fi
