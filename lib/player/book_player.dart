@@ -302,14 +302,17 @@ class BookPlayer extends ChangeNotifier {
       final chapter = _chapters[index];
       final candidates = <String>[];
       String? localCandidate;
-      // 本地导入书：直接播应用内文件，绝不联网（本地书没有 B 站流可拉）
-      if (_book!.localPath != null) {
-        final lp = _book!.localPath!;
-        if (await File(lp).exists()) {
-          candidates.add(lp);
-          localCandidate = lp;
-          debugPrint('[BookPlayer] 本地书，直接播放: $lp');
-        }
+      // 本地导入书：章节级文件优先（多章节书），其次书级单文件；
+      // 绝不联网（本地书没有 B 站流可拉）
+      if (chapter.localPath != null && await File(chapter.localPath!).exists()) {
+        candidates.add(chapter.localPath!);
+        localCandidate = chapter.localPath!;
+        debugPrint('[BookPlayer] 本地书章节文件: ${chapter.localPath}');
+      } else if (_book!.localPath != null &&
+          await File(_book!.localPath!).exists()) {
+        candidates.add(_book!.localPath!);
+        localCandidate = _book!.localPath!;
+        debugPrint('[BookPlayer] 本地书单文件: ${_book!.localPath}');
       }
       // 已下载章节离线优先：直接播本地文件，绝不先发网络请求。
       // （在线取流在断网时会抛异常，绝不能让它挡住本地播放——

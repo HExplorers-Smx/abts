@@ -132,9 +132,9 @@ Future<void> confirmRemoveFromShelf(BuildContext context, ShelfBook sb) async {
     ),
   );
   if (ok != true) return;
-  final isLocal = sb.book.localPath != null;
+  final isLocal = sb.book.localPath != null || sb.book.localDir != null;
   if (isLocal) {
-    await LocalLibrary.instance.deleteLocalFile(sb.book);
+    await LocalLibrary.instance.deleteLocalBook(sb.book);
   }
   await shelf.remove(sb.book.bvid);
   messenger.showSnackBar(

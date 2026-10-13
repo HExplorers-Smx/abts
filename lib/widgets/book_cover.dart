@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -31,7 +33,15 @@ class BookCover extends StatelessWidget {
       borderRadius: radius,
       child: src.isEmpty
           ? _fallback()
-          : CachedNetworkImage(
+          : src.startsWith('file://')
+              ? Image.file(
+                  File(src.substring(7)),
+                  width: width,
+                  height: height,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => _fallback(),
+                )
+              : CachedNetworkImage(
               imageUrl: src,
               width: width,
               height: height,

@@ -8,8 +8,13 @@ import '../models/book.dart';
 import '../models/chapter.dart';
 
 /// 本地音频导入：把用户选择的音频文件复制进应用目录，
-/// 包装成一本"本地书"（bvid 以 `local_` 开头，localPath 指向应用内文件），
+/// 包装成一本"本地书"（bvid 以 `local_` 开头），
 /// 与 B 站有声书共用书架 / 播放 / 进度体系。
+///
+/// 两种形态：
+/// - 多章节书（推荐）：`local_books/<bookId>/` 目录，内含 `cover.jpg`（可选）
+///   与按导入顺序命名的 `ch_001.mp3`…，Book.localDir 指向目录、每章带 localPath；
+/// - 单文件书（旧入口兼容）：`local_books/<hash>.<ext>` 散文件，Book.localPath 指向文件。
 class LocalLibrary {
   LocalLibrary._();
   static final LocalLibrary instance = LocalLibrary._();
@@ -21,8 +26,8 @@ class LocalLibrary {
     'mp3', 'm4a', 'm4b', 'aac', 'flac', 'wav', 'ogg', 'opus',
   ];
 
-  /// 应用内本地书目录（不存在则创建）
-  Future<Directory> _dir() async {
+  /// 应用内本地书根目录（不存在则创建）
+  Future<Directory> _root() async {
     final docs = await getApplicationDocumentsDirectory();
     final dir = Directory('${docs.path}/$_dirName');
     if (!await dir.exists()) await dir.create(recursive: true);
@@ -33,23 +38,126 @@ class LocalLibrary {
   static bool isLocalBook(Book book) => book.bvid.startsWith('local_');
   static bool isLocalBvid(String bvid) => bvid.startsWith('local_');
 
-  /// 文件名去掉扩展名，清理为书名
+  /// 文件名去掉扩展名，清理为标题
   static String titleFromFile(String name) {
     final dot = name.lastIndexOf('.');
     final base = dot > 0 ? name.substring(0, dot) : name;
     return base.trim().isEmpty ? '未命名音频' : base.trim();
   }
 
-  /// 由 路径+文件名+大小 派生稳定 id（同文件重复导入指向同一本书）
-  static String _hash(String path, String name, int size) {
-    final h = md5.convert(Uint8List.fromList(
-        '$path|$name|$size'.codeUnits));
-    return h.toString().substring(0, 12);
+  static String _hashBytes(String s) {
+    final h = md5.convert(Uint8List.fromList(s.codeUnits));
+    return h.toString();
   }
 
-  /// 导入单个音频文件：复制进应用目录并生成 Book。
+  /// 章节 cid：由 文件路径+名称+大小 派生（基本唯一，保底非 0）
+  static int _cidFor(String path, String name, int size) {
+    final h = _hashBytes('$path|$name|$size');
+    return h.codeUnits
+            .take(8)
+            .fold<int>(0, (a, b) => (a * 31 + b) & 0x7fffffff) |
+        1;
+  }
+
+  /// 创建一本书的元数据（目录 + 可选封面），返回空章节的本地书。
+  /// 之后调用 [addAudioFiles] 往这本书里导入音频章节。
+  Future<Book> createBook({
+    required String title,
+    String author = '本地文件',
+    String desc = '',
+    String? coverPath,
+  }) async {
+    final bookId = _hashBytes(
+      '$title|$author|${DateTime.now().microsecondsSinceEpoch}|${_rand()}',
+    ).substring(0, 10);
+    final root = await _root();
+    final dir = Directory('${root.path}/$bookId');
+    if (!await dir.exists()) await dir.create(recursive: true);
+
+    String pic = '';
+    if (coverPath != null && await File(coverPath).exists()) {
+      final cover = File('${dir.path}/cover.jpg');
+      await File(coverPath).copy(cover.path);
+      pic = 'file://${cover.path}';
+    }
+
+    return Book(
+      bvid: 'local_$bookId',
+      aid: 0,
+      title: title.trim().isEmpty ? '未命名书' : title.trim(),
+      pic: pic,
+      pages: 0,
+      duration: 0,
+      author: author.trim().isEmpty ? '本地文件' : author.trim(),
+      desc: desc.trim(),
+      localDir: dir.path,
+      chapters: <Chapter>[],
+    );
+  }
+
+  /// 往本地书里追加音频章节：按导入顺序复制为 `ch_001.mp3`…
+  /// 返回更新后的 Book（不修改传入对象）。
+  Future<Book> addAudioFiles(Book book, List<String> paths) async {
+    final dir = Directory(book.localDir!);
+    if (!await dir.exists()) await dir.create(recursive: true);
+    final chapters = <Chapter>[...?book.chapters];
+
+    for (final p in paths) {
+      final src = File(p);
+      if (!await src.exists()) continue;
+      final name = src.uri.pathSegments.isEmpty
+          ? 'audio'
+          : src.uri.pathSegments.last;
+      final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+      if (!supportedExtensions.contains(ext)) continue;
+      final size = await src.length();
+      final seq = chapters.length + 1;
+      final storedName = 'ch_${seq.toString().padLeft(3, '0')}.$ext';
+      final dst = File('${dir.path}/$storedName');
+      try {
+        final tmp = File('${dst.path}.tmp');
+        await src.copy(tmp.path);
+        if (!await tmp.exists()) continue;
+        await tmp.rename(dst.path);
+        chapters.add(Chapter(
+          cid: _cidFor(p, name, size),
+          page: seq,
+          part: titleFromFile(name),
+          duration: 0,
+          localPath: dst.path,
+        ));
+      } catch (_) {}
+    }
+
+    return Book(
+      bvid: book.bvid,
+      aid: book.aid,
+      title: book.title,
+      pic: book.pic,
+      pages: chapters.length,
+      duration: book.duration,
+      author: book.author,
+      mid: book.mid,
+      authorFace: book.authorFace,
+      desc: book.desc,
+      play: book.play,
+      like: book.like,
+      coin: book.coin,
+      favorite: book.favorite,
+      pubdate: book.pubdate,
+      upName: book.upName,
+      localPath: book.localPath,
+      localDir: book.localDir,
+      chapters: chapters,
+    );
+  }
+
+  String _rand() => (DateTime.now().millisecondsSinceEpoch % 7919).toString();
+
+  // ---------- 旧单文件入口（向后兼容已导入数据） ----------
+
+  /// 导入单个音频文件：复制进应用根目录并生成单文件 Book。
   /// 返回 null 表示目标文件不存在或不是受支持格式。
-  /// [rename] 可选，覆盖默认书名（文件名去扩展名）。
   Future<Book?> importFile(String sourcePath, {String? rename}) async {
     final src = File(sourcePath);
     if (!await src.exists()) return null;
@@ -60,14 +168,13 @@ class LocalLibrary {
     if (!supportedExtensions.contains(ext)) return null;
     final size = await src.length();
 
-    final hash = _hash(sourcePath, name, size);
+    final hash = _hashBytes('$sourcePath|$name|$size').substring(0, 12);
     final bvid = 'local_$hash';
     final storedName = '$hash.$ext';
-    final dir = await _dir();
-    final dst = File('${dir.path}/$storedName');
+    final root = await _root();
+    final dst = File('${root.path}/$storedName');
 
     if (!await dst.exists()) {
-      // 复制：先写临时文件再改名，避免半截文件被当成已导入
       final tmp = File('${dst.path}.tmp');
       await src.copy(tmp.path);
       if (!await tmp.exists()) return null;
@@ -75,10 +182,6 @@ class LocalLibrary {
     }
 
     final title = rename ?? titleFromFile(name);
-    final cid = int.tryParse(
-            hash.codeUnits.take(8).fold<int>(0, (a, b) => a * 31 + b).toString()) ??
-        0;
-
     return Book(
       bvid: bvid,
       aid: 0,
@@ -91,50 +194,59 @@ class LocalLibrary {
       localPath: dst.path,
       chapters: [
         Chapter(
-          cid: cid,
+          cid: _cidFor(sourcePath, name, size),
           page: 1,
           part: title,
           duration: 0,
+          localPath: dst.path,
         ),
       ],
     );
   }
 
-  /// 批量导入；返回（成功列表，失败原因列表）
-  Future<(List<Book>, List<String>)> importFiles(
-    List<String> paths, {
-    String? Function(String path)? renameFor,
-  }) async {
+  /// 批量导入（单文件入口）；返回（成功列表，失败路径列表）
+  Future<(List<Book>, List<String>)> importFiles(List<String> paths) async {
     final ok = <Book>[];
     final failed = <String>[];
     for (final p in paths) {
       try {
-        final book = await importFile(
-          p,
-          rename: renameFor?.call(p),
-        );
+        final book = await importFile(p);
         if (book == null) {
-          failed.add('$p：文件不存在或格式不支持');
+          failed.add(p);
         } else {
           ok.add(book);
         }
-      } catch (e) {
-        failed.add('$p：$e');
+      } catch (_) {
+        failed.add(p);
       }
     }
     return (ok, failed);
   }
 
-  /// 删除一本书的本地文件（仅限应用内 local_books 目录，防止误删用户文件）
-  Future<void> deleteLocalFile(Book book) async {
+  // ---------- 删除 ----------
+
+  /// 删除一本本地书：多章节书删整个目录，单文件书删文件。
+  /// 只动应用内 local_books 目录，绝不触碰用户其他文件。
+  Future<void> deleteLocalBook(Book book) async {
+    final root = await _root();
+    final rootAbs = root.absolute.path;
+    final dirPath = book.localDir;
+    if (dirPath != null) {
+      final d = Directory(dirPath);
+      if (d.absolute.path.startsWith(rootAbs) && await d.exists()) {
+        try {
+          await d.delete(recursive: true);
+        } catch (_) {}
+      }
+      return;
+    }
     final p = book.localPath;
     if (p == null) return;
-    final dir = await _dir();
-    final canonical = File(p).absolute.path;
-    if (!canonical.startsWith(dir.absolute.path)) return; // 非应用内，不动
-    try {
-      final f = File(p);
-      if (await f.exists()) await f.delete();
-    } catch (_) {}
+    final f = File(p);
+    if (f.absolute.path.startsWith(rootAbs) && await f.exists()) {
+      try {
+        await f.delete();
+      } catch (_) {}
+    }
   }
 }

@@ -5,11 +5,15 @@ class Chapter {
   final String part;
   final int duration; // 秒
 
+  /// 本地导入书：本章节对应的音频文件绝对路径（空表示在线章节/单文件本地书）
+  final String? localPath;
+
   Chapter({
     required this.cid,
     required this.page,
     required this.part,
     this.duration = 0,
+    this.localPath,
   });
 
   factory Chapter.fromMap(Map<String, dynamic> m) => Chapter(
@@ -17,6 +21,7 @@ class Chapter {
         page: int.tryParse('${m['page'] ?? 0}') ?? 0,
         part: m['part'] as String? ?? '',
         duration: int.tryParse('${m['duration'] ?? 0}') ?? 0,
+        localPath: m['localPath'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -24,6 +29,7 @@ class Chapter {
         'page': page,
         'part': part,
         'duration': duration,
+        if (localPath != null) 'localPath': localPath,
       };
 
   factory Chapter.fromJson(Map<String, dynamic> m) => Chapter.fromMap(m);

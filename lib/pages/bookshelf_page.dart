@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -9,177 +11,285 @@ import '../widgets/book_cards.dart';
 import '../widgets/shelf_common.dart';
 
 /// 书架：收藏的书籍 + 续读进度 + 本地导入
-class BookshelfPage extends StatelessWidget {
+/// - 末尾「＋」新建本地书：弹窗设置书名/封面/作者 → 导入音频章节；
+/// - 长按一本书进入多选模式，可批量删除（本地书连带删除应用内文件）。
+class BookshelfPage extends StatefulWidget {
   const BookshelfPage({super.key});
 
-  String _sizeText(int bytes) {
-    if (bytes >= 1024 * 1024) {
-      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
-    }
-    return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  @override
+  State<BookshelfPage> createState() => _BookshelfPageState();
+}
+
+class _BookshelfPageState extends State<BookshelfPage> {
+  /// 多选（批量删除）模式
+  bool _selectMode = false;
+  final Set<String> _selected = {};
+
+  void _toggleSelect(String bvid) {
+    setState(() {
+      _selectMode = true;
+      if (!_selected.add(bvid)) _selected.remove(bvid);
+    });
   }
 
-  /// 选择本地音频文件 → 确认 → 复制进应用目录 → 加入书架
-  Future<void> _pickAndImport(BuildContext context) async {
+  void _exitSelect() {
+    setState(() {
+      _selectMode = false;
+      _selected.clear();
+    });
+  }
+
+  /// 新建本地书：元数据弹窗（书名/封面/作者/简介）→ 选择音频 → 复制入库
+  Future<void> _createLocalBook(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     final shelf = context.read<ShelfStore>();
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: LocalLibrary.supportedExtensions,
-      allowMultiple: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final files = result.files.where((f) => f.path != null).toList();
-    if (files.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('未能读取所选文件')));
-      return;
-    }
-    if (!context.mounted) return;
-
-    var importing = false;
-    var progressText = '';
-    await showDialog<void>(
+    // ---------- 第一步：设置书名 / 封面 / 作者 / 简介 ----------
+    final titleCtrl = TextEditingController();
+    final authorCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    String? coverPath;
+    final ok = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) {
-          Future<void> doImport() async {
-            if (importing) return;
-            setDialogState(() {
-              importing = true;
-              progressText = '正在复制 0/${files.length} …';
-            });
-            var done = 0;
-            final failed = <String>[];
-            for (final f in files) {
-              try {
-                final book =
-                    await LocalLibrary.instance.importFile(f.path!);
-                if (book == null) {
-                  failed.add(f.name);
-                } else {
-                  await shelf.add(book);
-                  done++;
-                }
-              } catch (e) {
-                failed.add(f.name);
-              }
-              if (!context.mounted) return;
-              setDialogState(() {
-                progressText = '正在复制 $done/${files.length} …';
-              });
-            }
-            if (ctx.mounted) Navigator.of(ctx).pop();
-            if (!context.mounted) return;
-            messenger.showSnackBar(
-              SnackBar(
-                content: Text(
-                  failed.isEmpty
-                      ? '已导入 $done 本，可在书架收听'
-                      : '导入 $done 本，${failed.length} 个失败：'
-                          '${failed.take(3).join('、')}${failed.length > 3 ? ' 等' : ''}',
-                ),
-              ),
+          Future<void> pickCover() async {
+            final r = await FilePicker.platform.pickFiles(
+              type: FileType.image,
+              allowMultiple: false,
             );
+            final p = (r != null && r.files.isNotEmpty)
+                ? r.files.first.path
+                : null;
+            if (p != null) setDialogState(() => coverPath = p);
           }
 
           return AlertDialog(
             backgroundColor: AppTheme.surface,
             title: Text(
-              importing ? '正在导入…' : '导入本地音频',
+              '新建本地书',
               style: TextStyle(color: AppTheme.textMain, fontSize: 17),
             ),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: importing
-                  ? Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(
-                          progressText,
-                          style: TextStyle(color: AppTheme.textSub),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '复制完成后可直接离线收听，无需网络',
-                          style: TextStyle(
-                              fontSize: 12, color: AppTheme.textHint),
-                        ),
-                      ],
-                    )
-                  : Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '共 ${files.length} 个音频文件，将复制到应用内：',
-                          style: TextStyle(
-                              fontSize: 13, color: AppTheme.textSub),
-                        ),
-                        const SizedBox(height: 8),
-                        Flexible(
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            itemCount: files.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 6),
-                            itemBuilder: (_, i) {
-                              final f = files[i];
-                              return Row(
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GestureDetector(
+                    onTap: pickCover,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: coverPath == null
+                          ? Container(
+                              height: 132,
+                              color: AppTheme.surfaceHigh,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.audio_file_rounded,
-                                      size: 18, color: AppTheme.textHint),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      f.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                          fontSize: 13,
-                                          color: AppTheme.textMain),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
+                                  Icon(Icons.add_photo_alternate_outlined,
+                                      size: 30, color: AppTheme.textHint),
+                                  const SizedBox(height: 6),
                                   Text(
-                                    _sizeText(f.size),
+                                    '选择封面图片（可选）',
                                     style: TextStyle(
                                         fontSize: 12,
                                         color: AppTheme.textHint),
                                   ),
                                 ],
-                              );
-                            },
-                          ),
-                        ),
-                      ],
+                              ),
+                            )
+                          : Image.file(
+                              File(coverPath!),
+                              height: 132,
+                              width: double.infinity,
+                              fit: BoxFit.cover,
+                            ),
                     ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: titleCtrl,
+                    autofocus: true,
+                    style: TextStyle(color: AppTheme.textMain),
+                    decoration: InputDecoration(
+                      labelText: '书名（必填）',
+                      hintText: '例如：三体 · 广播剧',
+                      labelStyle:
+                          TextStyle(fontSize: 13, color: AppTheme.textSub),
+                      hintStyle:
+                          TextStyle(fontSize: 13, color: AppTheme.textHint),
+                      enabledBorder: UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: AppTheme.divider, width: 1),
+                      ),
+                      focusedBorder: UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: AppTheme.accent, width: 1.5),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: authorCtrl,
+                    style: TextStyle(color: AppTheme.textMain),
+                    decoration: InputDecoration(
+                      labelText: '作者（可选）',
+                      labelStyle:
+                          TextStyle(fontSize: 13, color: AppTheme.textSub),
+                      enabledBorder: UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: AppTheme.divider, width: 1),
+                      ),
+                      focusedBorder: UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: AppTheme.accent, width: 1.5),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descCtrl,
+                    style: TextStyle(color: AppTheme.textMain),
+                    decoration: InputDecoration(
+                      labelText: '简介（可选）',
+                      labelStyle:
+                          TextStyle(fontSize: 13, color: AppTheme.textSub),
+                      enabledBorder: UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: AppTheme.divider, width: 1),
+                      ),
+                      focusedBorder: UnderlineInputBorder(
+                        borderSide:
+                            BorderSide(color: AppTheme.accent, width: 1.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            actions: importing
-                ? null
-                : [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      child: Text('取消',
-                          style: TextStyle(color: AppTheme.textSub)),
-                    ),
-                    FilledButton(
-                      onPressed: doImport,
-                      child: const Text('开始导入'),
-                    ),
-                  ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: Text('取消', style: TextStyle(color: AppTheme.textSub)),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('下一步：导入音频'),
+              ),
+            ],
           );
         },
       ),
     );
+    if (ok != true || titleCtrl.text.trim().isEmpty) {
+      if (ok == true) {
+        messenger.showSnackBar(const SnackBar(content: Text('请填写书名')));
+      }
+      titleCtrl.dispose();
+      authorCtrl.dispose();
+      descCtrl.dispose();
+      return;
+    }
+    final title = titleCtrl.text.trim();
+    final author = authorCtrl.text.trim();
+    final desc = descCtrl.text.trim();
+    titleCtrl.dispose();
+    authorCtrl.dispose();
+    descCtrl.dispose();
+
+    // ---------- 第二步：选择要导入的音频 ----------
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: LocalLibrary.supportedExtensions,
+      allowMultiple: true,
+    );
+    if (result == null || result.files.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('未选择音频，未创建')));
+      return;
+    }
+    final paths =
+        result.files.map((f) => f.path).whereType<String>().toList();
+    if (paths.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('未能读取所选音频')));
+      return;
+    }
+    if (!context.mounted) return;
+
+    // ---------- 第三步：建书 + 复制音频（进度） ----------
+    final created = await LocalLibrary.instance.createBook(
+      title: title,
+      author: author,
+      desc: desc,
+      coverPath: coverPath,
+    );
+    if (!context.mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(
+              '正在复制 ${paths.length} 个音频…',
+              style: TextStyle(color: AppTheme.textSub, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+    final updated = await LocalLibrary.instance.addAudioFiles(created, paths);
+    await shelf.add(updated);
+    if (context.mounted) Navigator.of(context).pop(); // 关闭进度弹窗
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          '已创建《$title》，导入 ${updated.chapters?.length ?? 0} 个音频',
+        ),
+      ),
+    );
   }
 
-  /// 打开一本书：本地书直达播放页，在线书进详情页
-  void _openBook(BuildContext context, ShelfBook sb) {
-    openShelfBook(context, sb);
+  /// 批量删除选中书籍（本地书连带删除应用内文件）
+  Future<void> _deleteSelected(BuildContext context) async {
+    final shelf = context.read<ShelfStore>();
+    final messenger = ScaffoldMessenger.of(context);
+    final n = _selected.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title:
+            Text('删除 $n 本', style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
+        content: Text(
+          '确定删除选中的 $n 本书吗？\n本地导入的书其文件也会一并删除。',
+          style: TextStyle(color: AppTheme.textSub, fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('取消', style: TextStyle(color: AppTheme.textSub)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('删除', style: TextStyle(color: AppTheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final bvid in _selected.toList()) {
+      final sb = shelf.byBvid(bvid);
+      if (sb != null) {
+        await LocalLibrary.instance.deleteLocalBook(sb.book);
+        await shelf.remove(bvid);
+      }
+    }
+    _exitSelect();
+    messenger.showSnackBar(SnackBar(content: Text('已删除 $n 本')));
   }
 
   @override
@@ -189,24 +299,42 @@ class BookshelfPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('书架'),
-        actions: [
-          IconButton(
-            tooltip: '导入本地音频',
-            icon: const Icon(Icons.file_open_outlined),
-            onPressed: () => _pickAndImport(context),
-          ),
-          if (books.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Center(
-                child: Text(
-                  '${books.length} 本',
-                  style: TextStyle(color: AppTheme.textSub, fontSize: 13),
+        title: Text(_selectMode ? '已选 ${_selected.length} 本' : '书架'),
+        actions: _selectMode
+            ? [
+                TextButton(
+                  onPressed:
+                      _selected.isEmpty ? null : () => _deleteSelected(context),
+                  child: Text(
+                    '删除',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: _selected.isEmpty
+                          ? AppTheme.textHint
+                          : AppTheme.error,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        ],
+                TextButton(
+                  onPressed: _exitSelect,
+                  child: Text('取消',
+                      style:
+                          TextStyle(fontSize: 14, color: AppTheme.textSub)),
+                ),
+              ]
+            : [
+                if (books.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Center(
+                      child: Text(
+                        '${books.length} 本',
+                        style:
+                            TextStyle(color: AppTheme.textSub, fontSize: 13),
+                      ),
+                    ),
+                  ),
+              ],
       ),
       body: books.isEmpty
           ? Column(
@@ -214,16 +342,16 @@ class BookshelfPage extends StatelessWidget {
                 const Expanded(
                   child: EmptyShelfView(
                     title: '书架还是空的',
-                    subtitle: '去「发现」搜索在线有声书，或导入本地音频文件',
+                    subtitle: '去「发现」搜索在线有声书，或点下方新建本地书',
                     icon: Icons.library_books_outlined,
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 48),
                   child: FilledButton.tonalIcon(
-                    onPressed: () => _pickAndImport(context),
-                    icon: const Icon(Icons.file_open_outlined, size: 18),
-                    label: const Text('导入本地音频'),
+                    onPressed: () => _createLocalBook(context),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('新建本地书'),
                   ),
                 ),
               ],
@@ -236,20 +364,103 @@ class BookshelfPage extends StatelessWidget {
                 crossAxisSpacing: 12,
                 childAspectRatio: 0.52,
               ),
-              itemCount: books.length,
+              itemCount: books.length + 1, // 末尾「＋」新建本地书
               itemBuilder: (context, i) {
+                if (i == books.length) {
+                  return _AddBookTile(
+                    onTap: _selectMode
+                        ? _exitSelect
+                        : () => _createLocalBook(context),
+                  );
+                }
                 final sb = books[i];
-                return BookGridItem(
+                final selected = _selected.contains(sb.book.bvid);
+                final tile = BookGridItem(
                   book: sb.book,
-                  isLocal: sb.book.localPath != null,
+                  isLocal:
+                      sb.book.localPath != null || sb.book.localDir != null,
                   badge: sb.positionMs > 0
                       ? ShelfProgressBadge(percent: sb.percent)
                       : null,
-                  onTap: () => _openBook(context, sb),
-                  onLongPress: () => confirmRemoveFromShelf(context, sb),
+                  onTap: () {
+                    if (_selectMode) {
+                      _toggleSelect(sb.book.bvid);
+                    } else {
+                      openShelfBook(context, sb);
+                    }
+                  },
+                  onLongPress: () => _toggleSelect(sb.book.bvid),
+                );
+                if (!_selectMode) return tile;
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: selected ? AppTheme.accent : AppTheme.divider,
+                      width: selected ? 2 : 1,
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      tile,
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: Icon(
+                          selected
+                              ? Icons.check_circle_rounded
+                              : Icons.radio_button_unchecked,
+                          size: 20,
+                          color:
+                              selected ? AppTheme.accent : AppTheme.textHint,
+                        ),
+                      ),
+                    ],
+                  ),
                 );
               },
             ),
+    );
+  }
+}
+
+/// 书架末尾「＋」卡片：新建本地书
+class _AddBookTile extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AddBookTile({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceHigh,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.divider, width: 1),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.add_circle_outline, size: 42, color: AppTheme.accent),
+            const SizedBox(height: 10),
+            Text(
+              '新建本地书',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: AppTheme.textMain),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '书名 / 封面 / 音频',
+              style: TextStyle(fontSize: 11, color: AppTheme.textHint),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
