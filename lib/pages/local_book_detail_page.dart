@@ -295,8 +295,8 @@ class _LocalBookDetailPageState extends State<LocalBookDetailPage> {
     final ch = _book.chapters![index];
     final localPath = ch.localPath;
     if (localPath == null || localPath.isEmpty) return;
-    final cfg = await BaiduAsr.loadConfig();
     final messenger = ScaffoldMessenger.of(context);
+    final cfg = await BaiduAsr.loadConfig();
     if (!cfg.isConfigured || !cfg.enabled) {
       messenger.showSnackBar(
         const SnackBar(
