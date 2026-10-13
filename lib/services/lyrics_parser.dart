@@ -147,7 +147,7 @@ class LyricsParser {
   }
 
   static String _encode(List<LyricLine> lines) => jsonEncode({
-        'version': 1,
+        'version': 2, // v2 起携带词级时间戳 words；旧版文件无 words 字段可正常读取
         'lines': [for (final l in lines) l.toJson()],
       });
 }

@@ -635,16 +635,19 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
   }
 
   /// 当前句意群：逐字点亮 + 辉光（folia getClassicCharGlow 移植）
+  ///
+  /// 有词级时间戳（百度字幕模型 words_info）时每个字符按真实词时间点亮，
+  /// 词与声音严格同步；无词级数据时回退句内字数均分（近似扫字）。
   Widget _activeChunk(_Placement p, double t) {
     final text = p.text;
     final n = text.length;
     if (n == 0) return const SizedBox.shrink();
-    final charDur = math.max((p.end - p.start), 0.05) / n;
+    final timings = _charTimingsForChunk(p, text);
     final spans = <TextSpan>[];
     final fs = _fontSize * p.scale;
     for (var i = 0; i < n; i++) {
-      final s = p.start + charDur * i;
-      final e = i == n - 1 ? p.end : p.start + charDur * (i + 1);
+      final s = timings[i].s;
+      final e = timings[i].e;
       final glow = _charGlow(t, s, e);
       final status = (t < s
               ? 0.0
@@ -688,6 +691,66 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       overflow: TextOverflow.visible,
       style: TextStyle(fontSize: fs, height: _lineHeight),
     );
+  }
+
+  /// 意群内逐字符时间。优先用词级时间戳：
+  /// 把每个词的时间按词内字符数均分，通过"非空格字符流"对齐到意群文本
+  /// 中的字符；空格与未覆盖字符（标点等）回退句均分，保证不越界不重叠。
+  List<({double s, double e})> _charTimingsForChunk(_Placement p, String text) {
+    final n = text.length;
+    final charDur = math.max((p.end - p.start), 0.05) / n;
+    final fallback = <({double s, double e})>[];
+    for (var i = 0; i < n; i++) {
+      fallback.add((
+        s: p.start + charDur * i,
+        e: i == n - 1 ? p.end : p.start + charDur * (i + 1),
+      ));
+    }
+    final lines = _lines;
+    final line = lines != null && p.lineIndex >= 0 && p.lineIndex < lines.length
+        ? lines[p.lineIndex]
+        : null;
+    final words = line?.words;
+    if (words == null || words.isEmpty) return fallback;
+
+    // 非空格字符流对齐（词拼接与句文本去空格后一致，ASR 层已校验）
+    final textWs = text.replaceAll(' ', '');
+    final lineWs = line!.text.replaceAll(' ', '');
+    final offWs = lineWs.indexOf(textWs);
+    final nonSpaceIdx = <int>[];
+    for (var i = 0; i < n; i++) {
+      if (text[i] != ' ') nonSpaceIdx.add(i);
+    }
+    if (offWs < 0 || nonSpaceIdx.length != textWs.length) return fallback;
+
+    final mapping = List<({double s, double e})>.filled(
+        n, (s: 0, e: 0), growable: false);
+    var wordStreamPos = 0;
+    for (final w in words) {
+      final wlen = w.word.replaceAll(' ', '').length;
+      if (wlen <= 0) continue;
+      final ws = wordStreamPos;
+      wordStreamPos += wlen;
+      final we = wordStreamPos;
+      final lo = math.max(ws, offWs);
+      final hi = math.min(we, offWs + textWs.length);
+      if (lo >= hi) continue;
+      final dur = w.duration / wlen;
+      for (var pos = lo; pos < hi; pos++) {
+        final chunkIdx = nonSpaceIdx[pos - offWs];
+        final inWord = pos - ws;
+        mapping[chunkIdx] = (
+          s: w.start + dur * inWord,
+          e: inWord == wlen - 1
+              ? w.end
+              : w.start + dur * (inWord + 1),
+        );
+      }
+    }
+    for (var i = 0; i < n; i++) {
+      if (mapping[i].s == 0 && mapping[i].e == 0) mapping[i] = fallback[i];
+    }
+    return mapping;
   }
 
   double _charGlow(double time, double start, double end) {

@@ -114,8 +114,11 @@ class BaiduAsr {
           'speech_data': b64,
           'format': format,
           'sample_rate': 16000,
-          'pid': 80006, // 中文音视频字幕模型
+          'pid': 80006, // 中文音视频字幕模型：识别率更高、标点断句更准、返回词级时间
           'role_num': 1,
+          // 词级时间戳开关（部分账号/模型支持；多余字段如被忽略不影响主流程）
+          'enable_word_time': true,
+          'enable_words': true,
         },
       );
       final cd = create.data as Map? ?? {};
@@ -175,10 +178,36 @@ class BaiduAsr {
       final res = s?['res'];
       final text = res is List ? res.map((e) => '$e').join('') : '${res ?? ''}';
       if (text.trim().isEmpty) continue;
+
+      // 词级时间戳：words_info 每项 {word, start_time, end_time}(毫秒)
+      // 识别结果按字切分时即为字级，随文本顺序排列。
+      List<LyricWord>? words;
+      final wi = s?['words_info'] as List?;
+      if (wi != null && wi.isNotEmpty) {
+        final parsed = <LyricWord>[];
+        for (final w in wi) {
+          final m = w as Map?;
+          final wd = '${m?['word'] ?? ''}';
+          if (wd.trim().isEmpty) continue;
+          parsed.add(LyricWord(
+            word: wd,
+            start: ((m?['start_time'] as num?)?.toDouble() ?? 0) / 1000,
+            end: ((m?['end_time'] as num?)?.toDouble() ?? 0) / 1000,
+          ));
+        }
+        // 词文本拼接与句子文本一致时才采用，否则丢弃避免错位
+        final joined = parsed.map((e) => e.word).join();
+        if (joined.replaceAll(' ', '') == text.replaceAll(' ', '') &&
+            parsed.isNotEmpty) {
+          words = parsed;
+        }
+      }
+
       lines.add(LyricLine(
         start: begin,
         end: end > begin ? end : begin + 1,
         text: text.trim(),
+        words: words,
       ));
     }
     if (lines.isEmpty && whole != null && whole.trim().isNotEmpty) {
