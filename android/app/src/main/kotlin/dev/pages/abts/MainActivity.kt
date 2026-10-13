@@ -143,9 +143,43 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /** 是否已授予「安装未知来源应用」权限（Android 8+ 调起安装器前必须检查） */
+    private fun canInstallApk(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+    }
+
+    /** 打开系统「安装未知来源应用」权限设置页（Android 8+） */
+    private fun openInstallPermissionSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+            intent.data = Uri.parse("package:$packageName")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            // 部分 ROM 不支持带包名跳转，退化为应用详情页
+            try {
+                val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                fallback.data = Uri.parse("package:$packageName")
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(fallback)
+            } catch (e2: Exception) {
+                // 都打不开就算了，由 Dart 侧提示用户手动去设置
+            }
+        }
+    }
+
     /** 拉起系统安装器安装 APK；成功拉起返回 true，失败返回 false */
     private fun installApk(path: String?): Boolean {
         if (path.isNullOrEmpty()) return false
+        // Android 8+ 未授予「安装未知来源应用」权限：先引导去开权限，不硬弹安装器
+        if (!canInstallApk()) {
+            openInstallPermissionSettings()
+            return false
+        }
         return try {
             val file = java.io.File(path)
             if (!file.exists()) return false

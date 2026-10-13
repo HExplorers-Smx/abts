@@ -624,8 +624,8 @@ class MyPage extends StatelessWidget {
     } else {
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('自动安装未成功，请检查是否允许安装未知来源应用'),
-          duration: Duration(seconds: 4),
+          content: Text('未完成安装：如需「安装未知来源应用」权限，已为你打开设置页，开启后回到本页再点一次「立即安装」'),
+          duration: Duration(seconds: 5),
         ),
       );
     }
