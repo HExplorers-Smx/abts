@@ -49,7 +49,7 @@ class FavoritesPage extends StatelessWidget {
                 final sb = books[i];
                 return BookGridItem(
                   book: sb.book,
-                  isLocal: sb.book.localPath != null,
+                  isLocal: sb.book.localPath != null || sb.book.localDir != null,
                   badge: sb.positionMs > 0
                       ? ShelfProgressBadge(percent: sb.percent)
                       : null,

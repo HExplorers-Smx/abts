@@ -115,9 +115,13 @@ class ShelfStore extends ChangeNotifier {
       existing.book = book; // 刷新元数据（封面/标题等可能已变化）
       existing.updatedAt = DateTime.now().millisecondsSinceEpoch;
     } else {
+      // 本地书创建时章节可能为空，不能对空列表取 first
+      final firstCid = (book.chapters != null && book.chapters!.isNotEmpty)
+          ? book.chapters!.first.cid
+          : 0;
       _books.add(
         withProgress ??
-            ShelfBook(book: book, lastCid: book.chapters?.first.cid ?? 0),
+            ShelfBook(book: book, lastCid: firstCid),
       );
     }
     notifyListeners();
