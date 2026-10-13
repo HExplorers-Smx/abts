@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.content.pm.PackageInstaller
 import android.provider.Settings
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -172,18 +173,50 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
-    /** 拉起系统安装器安装 APK；成功拉起返回 true，失败返回 false */
-    private fun installApk(path: String?): Boolean {
-        if (path.isNullOrEmpty()) return false
-        // Android 8+ 未授予「安装未知来源应用」权限：先引导去开权限，不硬弹安装器
-        if (!canInstallApk()) {
-            openInstallPermissionSettings()
-            return false
+    /**
+     * 安装下载好的 APK，返回 {ok, message}：
+     *
+     * 1) 优先用 PackageInstaller 会话安装（系统推荐路径，不依赖外部安装器
+     *    Activity 的兼容性，且能拿到具体异常原因）；
+     * 2) 失败回退 ACTION_VIEW + FileProvider（传统拉起系统安装器）；
+     * 3) 仍失败且权限未授予 → 打开「安装未知来源应用」设置页。
+     *
+     * 不再把 canRequestPackageInstalls() 当作硬门槛：部分 ROM（如 ColorOS）
+     * 在权限已开启时该 API 仍可能误报，直接尝试安装、失败再引导，更可靠。
+     */
+    private fun installApk(path: String?): Map<String, Any?> {
+        if (path.isNullOrEmpty()) {
+            return mapOf("ok" to false, "message" to "安装包路径为空")
         }
+        val file = java.io.File(path)
+        if (!file.exists() || file.length() == 0L) {
+            return mapOf("ok" to false, "message" to "安装包不存在或未下载完整，请重新下载")
+        }
+
+        // 1) PackageInstaller 会话安装（Android 5.0+）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val sessionParams =
+                    PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                val session =
+                    packageManager.packageInstaller.createSession(sessionParams)
+                file.inputStream().use { input ->
+                    val out = session.openWrite(file.name, 0, file.length())
+                    input.copyTo(out)
+                    session.fsync(out)
+                    out.close()
+                }
+                // commit 后系统会弹出安装确认界面（非 root 必现）
+                session.commit(null)
+                session.close()
+                return mapOf("ok" to true, "message" to "已提交系统安装，请按屏幕提示完成安装")
+            } catch (e: Exception) {
+                // 权限不足 / ROM 不支持：继续走 ACTION_VIEW 兜底
+            }
+        }
+
+        // 2) ACTION_VIEW + FileProvider 兜底
         return try {
-            val file = java.io.File(path)
-            if (!file.exists()) return false
-            // Android 7.0+ 必须用 content://（FileProvider），file:// 会崩
             val apkUri: Uri =
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     androidx.core.content.FileProvider.getUriForFile(
@@ -200,9 +233,16 @@ class MainActivity : AudioServiceActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             startActivity(intent)
-            true
+            mapOf("ok" to true, "message" to "已拉起系统安装器，请按屏幕提示完成安装")
         } catch (e: Exception) {
-            false
+            // 3) 仍失败：引导「安装未知来源应用」权限
+            if (!canInstallApk()) {
+                openInstallPermissionSettings()
+            }
+            mapOf(
+                "ok" to false,
+                "message" to "系统拒绝安装（${e.message ?: "未知原因"}）。若提示缺少权限，请开启「允许从此来源安装应用」后重试",
+            )
         }
     }
 

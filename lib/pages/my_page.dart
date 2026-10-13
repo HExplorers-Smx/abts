@@ -611,24 +611,18 @@ class MyPage extends StatelessWidget {
   Future<void> _launchInstaller(
       String savePath, ScaffoldMessengerState messenger) async {
     const channel = MethodChannel('abts/installer');
-    final ok = await channel
-            .invokeMethod<bool>('installApk', {'path': savePath}) ??
-        false;
-    if (ok) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('安装包已就绪，请按系统提示完成安装'),
-          duration: Duration(seconds: 3),
-        ),
-      );
-    } else {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('未完成安装：如需「安装未知来源应用」权限，已为你打开设置页，开启后回到本页再点一次「立即安装」'),
-          duration: Duration(seconds: 5),
-        ),
-      );
-    }
+    final res = await channel.invokeMethod<Map>('installApk', {'path': savePath}) ??
+        const <Object?, Object?>{};
+    final ok = res['ok'] == true;
+    final msg = '${res['message'] ?? ''}';
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(ok
+            ? (msg.isEmpty ? '安装包已就绪，请按系统提示完成安装' : msg)
+            : (msg.isEmpty ? '安装失败，请重试' : msg)),
+        duration: Duration(seconds: ok ? 3 : 6),
+      ),
+    );
   }
 }
 
