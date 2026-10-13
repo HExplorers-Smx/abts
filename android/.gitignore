@@ -12,3 +12,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# 固定发布签名证书（无密码不可用；密码走 GitHub Secrets，不入库）
+!app/abts-release.keystore

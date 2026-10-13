@@ -106,6 +106,20 @@ jobs:
       - name: 启用 Gradle 依赖缓存
         uses: gradle/actions/setup-gradle@v4
 
+      # 发布签名：仓库内固定证书 abts-release.keystore（无密码不可用），
+      # 密码从 GitHub Secrets 读取写入 android/key.properties（不入库）。
+      # 保证所有历史版本的签名一致 → 手机可平滑覆盖安装。
+      - name: 生成发布签名配置
+        if: ${{ steps.params.outputs.build_type == 'release' }}
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.KEYSTORE_STORE_PASSWORD }}
+          keyPassword=${{ secrets.KEYSTORE_KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEYSTORE_KEY_ALIAS }}
+          storeFile=abts-release.keystore
+          EOF
+          echo "已生成 android/key.properties（release 签名证书就绪）"
+
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
         with:

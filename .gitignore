@@ -49,6 +49,7 @@ app.*.map.json
 key.properties
 *.jks
 *.keystore
+!android/app/abts-release.keystore
 
 # 本地打包素材（含签名文件，不入库）
 /打包数据/
