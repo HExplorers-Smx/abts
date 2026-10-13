@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
@@ -11,6 +12,7 @@ import '../models/lyric_line.dart';
 import '../player/book_player.dart';
 import '../services/bili_api.dart';
 import '../services/download_store.dart';
+import '../services/lyrics_parser.dart';
 
 /// 仿 folia-major「Monet」歌词效果。
 ///
@@ -64,6 +66,9 @@ class _LyricsViewState extends State<LyricsView>
   List<LyricLine>? _lines;
   bool _loading = false;
   String? _error;
+
+  /// 本地章节未配文稿（区别于在线书「本集确实没有文稿」）
+  bool _noLyrics = false;
 
   /// 文本行高测量缓存（文本 + 宽度 -> 高度）
   final Map<String, double> _heightCache = {};
@@ -193,18 +198,29 @@ class _LyricsViewState extends State<LyricsView>
     _loadedKey = key;
     _loading = true;
     _error = null;
+    _noLyrics = false;
     _lines = null;
     _fetch(key, book.bvid, chapter.cid);
   }
 
   Future<void> _fetch(String key, String bvid, int cid) async {
     try {
-      // 本地导入的书没有 B 站文稿，也不调 AI 字幕接口（bvid 无效会白白报错）
+      // 本地导入的书：优先读章节同目录的 `<音频名>.lyrics.json`
+      // （用户通过章节页「文稿」导入的 txt/LRC/SRT 解析产物，离线可用）
       if (bvid.startsWith('local_')) {
+        List<LyricLine>? lines;
+        final localPath = widget.player.currentChapter?.localPath;
+        if (localPath != null && localPath.isNotEmpty) {
+          try {
+            lines = LyricsParser.readLyricsFile(File(localPath));
+          } catch (_) {}
+        }
         if (!mounted || _loadedKey != key) return;
         setState(() {
-          _lines = <LyricLine>[];
+          _lines = lines ?? <LyricLine>[];
           _loading = false;
+          // 没有文稿：显示引导占位而非空白
+          _noLyrics = lines == null || lines.isEmpty;
         });
         return;
       }
@@ -219,6 +235,7 @@ class _LyricsViewState extends State<LyricsView>
       setState(() {
         _lines = lines;
         _loading = false;
+        _noLyrics = false;
       });
     } catch (e) {
       debugPrint('[LyricsView] 文稿获取失败: $e');
@@ -293,7 +310,11 @@ class _LyricsViewState extends State<LyricsView>
       );
     }
     if (lines.isEmpty) {
-      return _statusBox('本集暂无文稿\n（点空白返回封面）');
+      return _statusBox(
+        _noLyrics
+            ? '本章暂无文稿\n去章节页点「文稿」导入 txt / LRC / SRT\n（点空白返回封面）'
+            : '本集暂无文稿\n（点空白返回封面）',
+      );
     }
     return LayoutBuilder(
       builder: (context, constraints) {

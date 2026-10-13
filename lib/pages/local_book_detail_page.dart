@@ -9,6 +9,7 @@ import '../core/theme/app_theme.dart';
 import '../models/book.dart';
 import '../player/book_player.dart';
 import '../services/local_library.dart';
+import '../services/lyrics_parser.dart';
 import '../widgets/book_cover.dart';
 import 'player_page.dart';
 
@@ -248,6 +249,55 @@ class _LocalBookDetailPageState extends State<LocalBookDetailPage> {
     await _persist();
   }
 
+  /// 为章节导入文稿（txt / lrc / srt）：
+  /// 解析成带时间轴的歌词行并写入音频同目录 `<音频名>.lyrics.json`，
+  /// 播放页歌词视图离线直接读取，效果与 B 站在线文稿一致。
+  Future<void> _pickLyrics(int index) async {
+    final ch = _book.chapters![index];
+    final localPath = ch.localPath;
+    if (localPath == null || localPath.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        dialogTitle: '选择文稿文件（txt / lrc / srt）',
+        type: FileType.custom,
+        allowedExtensions: ['txt', 'lrc', 'srt'],
+      );
+    } catch (e) {
+      debugPrint('[LocalBookDetail] 选择文稿失败: $e');
+    }
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null || path.isEmpty) return;
+    try {
+      final src = File(path);
+      final lines =
+          LyricsParser.parseFile(src, totalSeconds: ch.duration.toDouble());
+      if (lines.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(
+              content: Text('文稿解析为空，请检查文件内容'),
+              duration: Duration(seconds: 2)),
+        );
+        return;
+      }
+      await LyricsParser.saveLyricsFile(File(localPath), lines);
+      if (!mounted) return;
+      setState(() {});
+      messenger.showSnackBar(SnackBar(
+        content: Text('文稿已导入（${lines.length} 行），播放页歌词可查看'),
+        duration: const Duration(seconds: 3),
+      ));
+    } catch (e) {
+      debugPrint('[LocalBookDetail] 文稿导入失败: $e');
+      messenger.showSnackBar(SnackBar(
+        content: Text('文稿导入失败：$e'),
+        duration: const Duration(seconds: 3),
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final chapters = _book.chapters ?? const [];
@@ -436,6 +486,29 @@ class _LocalBookDetailPageState extends State<LocalBookDetailPage> {
                         ),
                       ),
                       const SizedBox(width: 8),
+                      if (ch.localPath != null && ch.localPath!.isNotEmpty)
+                        Builder(builder: (ctx) {
+                          final hasLyrics =
+                              LyricsParser.lyricsFileExists(File(ch.localPath!));
+                          return IconButton(
+                            tooltip: hasLyrics ? '文稿已导入，点此更换' : '导入文稿',
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints:
+                                const BoxConstraints(minWidth: 34, minHeight: 34),
+                            icon: Icon(
+                              hasLyrics
+                                  ? Icons.lyrics_rounded
+                                  : Icons.lyrics_outlined,
+                              size: 19,
+                              color: hasLyrics
+                                  ? AppTheme.accent
+                                  : AppTheme.textHint,
+                            ),
+                            onPressed: () => _pickLyrics(i),
+                          );
+                        }),
+                      const SizedBox(width: 4),
                       Icon(Icons.play_circle_outline,
                           size: 20, color: AppTheme.textHint),
                     ],
