@@ -96,6 +96,7 @@ class LocalLibrary {
   }
 
   /// 往本地书里追加音频章节：按导入顺序复制为 `ch_001.mp3`…
+  /// 自动跳过已占用的序号，避免与删除后残留的编号冲突。
   /// 返回更新后的 Book（不修改传入对象）。
   Future<Book> addAudioFiles(Book book, List<String> paths) async {
     final dir = Directory(book.localDir!);
@@ -111,8 +112,12 @@ class LocalLibrary {
       final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
       if (!supportedExtensions.contains(ext)) continue;
       final size = await src.length();
-      final seq = chapters.length + 1;
-      final storedName = 'ch_${seq.toString().padLeft(3, '0')}.$ext';
+      var seq = chapters.length + 1;
+      var storedName = 'ch_${seq.toString().padLeft(3, '0')}.$ext';
+      while (await File('${dir.path}/$storedName').exists()) {
+        seq++;
+        storedName = 'ch_${seq.toString().padLeft(3, '0')}.$ext';
+      }
       final dst = File('${dir.path}/$storedName');
       try {
         final tmp = File('${dst.path}.tmp');
@@ -129,26 +134,85 @@ class LocalLibrary {
       } catch (_) {}
     }
 
+    return _copyBook(book, chapters: chapters);
+  }
+
+  /// 更新本地书的元信息（书名/作者/简介/封面）。
+  /// [coverPath] 为空则保留原封面；传新路径则替换封面文件。
+  Future<Book> updateBookMeta(
+    Book book, {
+    required String title,
+    String author = '本地文件',
+    String desc = '',
+    String? coverPath,
+  }) async {
+    var pic = book.pic;
+    final dirPath = book.localDir;
+    if (dirPath != null && coverPath != null && await File(coverPath).exists()) {
+      final dir = Directory(dirPath);
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final cover = File('${dir.path}/cover.jpg');
+      try {
+        await File(coverPath).copy(cover.path);
+        pic = 'file://${cover.path}';
+      } catch (_) {}
+    }
+    return _copyBook(
+      book,
+      title: title.trim().isEmpty ? book.title : title.trim(),
+      author: author.trim().isEmpty ? '本地文件' : author.trim(),
+      desc: desc.trim(),
+      pic: pic,
+    );
+  }
+
+  /// 删除一章：先删应用内音频文件，再更新章节列表。
+  /// 返回更新后的 Book（不修改传入对象）。
+  Future<Book> removeChapter(Book book, int index) async {
+    final chapters = <Chapter>[...?book.chapters];
+    if (index < 0 || index >= chapters.length) return book;
+    final ch = chapters.removeAt(index);
+    final p = ch.localPath;
+    if (p != null) {
+      try {
+        final f = File(p);
+        final root = await _root();
+        if (f.absolute.path.startsWith(root.absolute.path) && await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    }
+    return _copyBook(book, chapters: chapters);
+  }
+
+  Book _copyBook(
+    Book b, {
+    String? title,
+    String? author,
+    String? desc,
+    String? pic,
+    List<Chapter>? chapters,
+  }) {
     return Book(
-      bvid: book.bvid,
-      aid: book.aid,
-      title: book.title,
-      pic: book.pic,
-      pages: chapters.length,
-      duration: book.duration,
-      author: book.author,
-      mid: book.mid,
-      authorFace: book.authorFace,
-      desc: book.desc,
-      play: book.play,
-      like: book.like,
-      coin: book.coin,
-      favorite: book.favorite,
-      pubdate: book.pubdate,
-      upName: book.upName,
-      localPath: book.localPath,
-      localDir: book.localDir,
-      chapters: chapters,
+      bvid: b.bvid,
+      aid: b.aid,
+      title: title ?? b.title,
+      pic: pic ?? b.pic,
+      pages: chapters?.length ?? b.pages,
+      duration: b.duration,
+      author: author ?? b.author,
+      mid: b.mid,
+      authorFace: b.authorFace,
+      desc: desc ?? b.desc,
+      play: b.play,
+      like: b.like,
+      coin: b.coin,
+      favorite: b.favorite,
+      pubdate: b.pubdate,
+      upName: b.upName,
+      localPath: b.localPath,
+      localDir: b.localDir,
+      chapters: chapters ?? b.chapters,
     );
   }
 

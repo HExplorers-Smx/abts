@@ -9,6 +9,7 @@ import '../core/theme/app_theme.dart';
 import '../services/local_library.dart';
 import '../widgets/book_cards.dart';
 import '../widgets/shelf_common.dart';
+import 'local_book_detail_page.dart';
 
 /// 书架：收藏的书籍 + 续读进度 + 本地导入
 /// - 末尾「＋」新建本地书：弹窗设置书名/封面/作者 → 导入音频章节；
@@ -174,7 +175,7 @@ class _BookshelfPageState extends State<BookshelfPage> {
               ),
               FilledButton(
                 onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('下一步：导入音频'),
+                child: const Text('确认'),
               ),
             ],
           );
@@ -196,60 +197,24 @@ class _BookshelfPageState extends State<BookshelfPage> {
     titleCtrl.dispose();
     authorCtrl.dispose();
     descCtrl.dispose();
-
-    // ---------- 第二步：选择要导入的音频 ----------
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: LocalLibrary.supportedExtensions,
-      allowMultiple: true,
-    );
-    if (result == null || result.files.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('未选择音频，未创建')));
-      return;
-    }
-    final paths =
-        result.files.map((f) => f.path).whereType<String>().toList();
-    if (paths.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('未能读取所选音频')));
-      return;
-    }
     if (!context.mounted) return;
 
-    // ---------- 第三步：建书 + 复制音频（进度） ----------
+    // ---------- 第二步：创建本地书，进入二级界面导入音频 ----------
     final created = await LocalLibrary.instance.createBook(
       title: title,
       author: author,
       desc: desc,
       coverPath: coverPath,
     );
+    await shelf.add(created);
     if (!context.mounted) return;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text(
-              '正在复制 ${paths.length} 个音频…',
-              style: TextStyle(color: AppTheme.textSub, fontSize: 13),
-            ),
-          ],
-        ),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LocalBookDetailPage(book: created),
       ),
     );
-    final updated = await LocalLibrary.instance.addAudioFiles(created, paths);
-    await shelf.add(updated);
-    if (context.mounted) Navigator.of(context).pop(); // 关闭进度弹窗
     messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          '已创建《$title》，导入 ${updated.chapters?.length ?? 0} 个音频',
-        ),
-      ),
+      SnackBar(content: Text('《$title》已创建，去导入音频吧')),
     );
   }
 

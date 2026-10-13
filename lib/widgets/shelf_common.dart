@@ -5,8 +5,7 @@ import '../core/nav/home_tabs.dart';
 import '../core/storage/shelf_store.dart';
 import '../core/theme/app_theme.dart';
 import '../pages/book_detail_page.dart';
-import '../pages/player_page.dart';
-import '../player/book_player.dart';
+import '../pages/local_book_detail_page.dart';
 import '../services/local_library.dart';
 
 /// 书架进度徽标（百分比）
@@ -80,19 +79,14 @@ class EmptyShelfView extends StatelessWidget {
   }
 }
 
-/// 打开书架上的书：本地导入书直达播放页（详情页依赖 B 站接口，
-/// 本地书没有 bvid 数据，进去只会报错）；在线书进详情页
+/// 打开书架上的书：本地导入书进二级界面（本地书详情/管理页），
+/// 在线书进详情页；本地书不直达播放（详情页依赖 B 站接口会报错）
 void openShelfBook(BuildContext context, ShelfBook sb) {
-  final player = context.read<BookPlayer>();
-  if (sb.book.localPath != null) {
-    player.flushProgress();
-    player.playBook(
-      sb.book,
-      resumeIndex: sb.lastChapterIndex,
-      resumeMs: sb.positionMs,
-    );
+  if (sb.book.localPath != null || sb.book.localDir != null) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const PlayerPage()),
+      MaterialPageRoute(
+        builder: (_) => LocalBookDetailPage(book: sb.book),
+      ),
     );
     return;
   }
