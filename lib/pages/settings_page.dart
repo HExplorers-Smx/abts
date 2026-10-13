@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../player/book_player.dart';
 import '../services/download_manager.dart';
@@ -28,6 +29,9 @@ class _SettingsPageState extends State<SettingsPage> {
   String _asrSecretKey = '';
   bool _asrEnabled = false;
 
+  /// 歌词全局偏移（ms）：文稿时间轴与声音对不齐时手动校准
+  int _lyricsOffsetMs = 0;
+
   bool get _asrConfigured =>
       _asrAppId.isNotEmpty && _asrApiKey.isNotEmpty && _asrSecretKey.isNotEmpty;
 
@@ -36,6 +40,11 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _refresh();
     _refreshAsr();
+    SharedPreferences.getInstance().then((p) {
+      final v = p.getInt('lyrics_offset_ms');
+      if (!mounted) return;
+      setState(() => _lyricsOffsetMs = v ?? 0);
+    });
   }
 
   Future<void> _refresh() async {
@@ -155,6 +164,24 @@ class _SettingsPageState extends State<SettingsPage> {
                 }
               },
             ),
+          ),
+          ListTile(
+            leading:
+                Icon(Icons.sync_alt_rounded, color: AppTheme.accent),
+            title: Text(
+              '歌词同步偏移',
+              style: TextStyle(fontSize: 14, color: AppTheme.textMain),
+            ),
+            subtitle: Text(
+              _lyricsOffsetMs == 0
+                  ? '文稿时间轴与声音对不齐时，在这里微调校准'
+                  : '当前 ${_lyricsOffsetMs > 0 ? '+' : ''}$_lyricsOffsetMs ms'
+                      '（${_lyricsOffsetMs > 0 ? '提前显示' : '延后显示'}）',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+            trailing: Icon(Icons.chevron_right_rounded,
+                color: AppTheme.textHint, size: 20),
+            onTap: _editLyricsOffset,
           ),
           _sectionTitle('下载与存储'),
           Consumer<DownloadManager>(
@@ -344,6 +371,80 @@ class _SettingsPageState extends State<SettingsPage> {
         _asrEnabled = c.enabled;
       });
     });
+  }
+
+  /// 歌词同步偏移调节（folia lyricOffsetMemory 的简化版，保存本机）
+  Future<void> _editLyricsOffset() async {
+    var value = _lyricsOffsetMs;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: Text('歌词同步偏移',
+              style: TextStyle(color: AppTheme.textMain, fontSize: 17)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                value == 0
+                    ? '对齐（0 ms）'
+                    : value > 0
+                        ? '提前 $value ms'
+                        : '延后 ${-value} ms',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.accent),
+              ),
+              const SizedBox(height: 12),
+              Slider(
+                value: value.toDouble(),
+                min: -1500,
+                max: 1500,
+                divisions: 60,
+                activeColor: AppTheme.accent,
+                inactiveColor: AppTheme.divider,
+                label: '$value ms',
+                onChanged: (v) {
+                  value = (v / 50).round() * 50;
+                  setDialogState(() {});
+                },
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '歌词比声音快 → 往正调（提前显示）；\n歌词比声音慢 → 往负调（延后显示）。建议打开歌词边听边调，每次 ±50ms。',
+                style: TextStyle(
+                    fontSize: 11, color: AppTheme.textHint, height: 1.5),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                value = 0;
+                setDialogState(() {});
+              },
+              child: Text('重置', style: TextStyle(color: AppTheme.textSub)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('取消', style: TextStyle(color: AppTheme.textSub)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('保存', style: TextStyle(color: AppTheme.accent)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (value != _lyricsOffsetMs) {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt('lyrics_offset_ms', value);
+      if (!mounted) return;
+      setState(() => _lyricsOffsetMs = value);
+    }
   }
 
   Widget _sectionTitle(String text) {

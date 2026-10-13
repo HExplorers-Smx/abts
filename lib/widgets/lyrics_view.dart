@@ -6,6 +6,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/theme/app_theme.dart';
 import '../models/lyric_line.dart';
@@ -18,9 +19,12 @@ import '../services/lyrics_parser.dart';
 ///
 /// 还原要点（参数取自 folia-major 源码）：
 /// - 当前行居中高亮，其余行按距离缩小 / 变暗 / 模糊（resolveLineTone 的移植）；
-/// - 当前行逐字扫字点亮 + 柔化前缘 + 辉光（resolveMonetFillWidth / resolveMonetGlow / mask 的移植）；
+/// - 当前行**逐字点亮**（MonetRailTokens 方案）：未唱到的字保持暗色、
+///   正在唱的字从暗色渐变成主题亮色并带辉光脉冲、唱过的字保持主题亮色
+///   并随辉光缓慢驻留衰减（resolveMonetGlow 的 Smoothstep 起峰/驻留/衰减）；
 /// - 上下渐隐遮罩；整轨用 SpringSimulation 弹簧滚动（folia MONET_SCROLL_SPRING）；
 /// - 支持手动上下拖动浏览歌词，1.8s 无操作自动回到跟随（folia idle reset）；
+/// - 全局歌词偏移（设置页可调 ±1.5s，保存本机，folia lyricOffsetMemory 的移植）；
 /// - 点击歌词行跳转播放，点击空白区域切回封面。
 class LyricsView extends StatefulWidget {
   const LyricsView({super.key, required this.player, this.onToggleCover});
@@ -35,15 +39,15 @@ class LyricsView extends StatefulWidget {
 class _LyricsViewState extends State<LyricsView>
     with SingleTickerProviderStateMixin {
   // ---------- 布局/动效参数（对应 folia monetRailLayout / monetLyricMotion） ----------
-  static const double _fontSize = 17;
-  static const double _lineHeight = 1.4;
-  // 行距统一用 inactiveGap（folia 的 active/inactive 双间距在默认字号下相差仅 4px，
-  // 统一间距让轨道坐标与 active 无关，换行时不跳变）
-  static const double _inactiveGap = 14;
-  static const int _visibleBefore = 4;
-  static const int _visibleAfter = 4;
-  static const double _glowPad = 8;
-  static const double _inactiveScale = 0.85; // ≈ inactiveFontPx / lyricFontPx
+  // folia 当前行字号较大、行内上下留白充分（textPaddingTop=fontPx*0.16 /
+  // textPaddingBottom=fontPx*0.34），前后各保留 1~2 行即可（before:1 after:1）
+  static const double _fontSize = 20;
+  static const double _lineHeight = 1.5;
+  static const double _inactiveGap = 22;
+  static const int _visibleBefore = 2;
+  static const int _visibleAfter = 2;
+  static const double _glowPad = 10;
+  static const double _inactiveScale = 0.84; // ≈ inactiveFontPx / lyricFontPx
   // folia MONET_SCROLL_SPRING：过阻尼弹簧（无回弹、平滑趋近）
   static const SpringDescription _spring = SpringDescription(
     mass: 0.82,
@@ -62,6 +66,9 @@ class _LyricsViewState extends State<LyricsView>
   bool _playing = false;
   double _rate = 1;
 
+  /// 全局歌词偏移（ms，设置页可调）：正数=歌词提前显示（字幕比声音晚时往正调）
+  double _offsetMs = 0;
+
   String? _loadedKey;
   List<LyricLine>? _lines;
   bool _loading = false;
@@ -72,9 +79,6 @@ class _LyricsViewState extends State<LyricsView>
 
   /// 文本行高测量缓存（文本 + 宽度 -> 高度）
   final Map<String, double> _heightCache = {};
-
-  /// 逐字 x 位置缓存（当前行扫字用）
-  final Map<String, List<double>> _offsetCache = {};
 
   // ---------- 轨道滚动（folia：弹簧跟随 + 手动浏览 + idle 复位） ----------
   late final AnimationController _scrollCtrl =
@@ -103,6 +107,12 @@ class _LyricsViewState extends State<LyricsView>
     if (_playing) _ticker.start();
     widget.player.positionTick.addListener(_onPosition);
     widget.player.addListener(_onPlayerChanged);
+    // 读取用户设置里的全局歌词偏移（folia lyricOffsetMemory 的简化版）
+    SharedPreferences.getInstance().then((p) {
+      final v = p.getDouble('lyrics_offset_ms');
+      if (!mounted) return;
+      setState(() => _offsetMs = v ?? 0);
+    });
   }
 
   @override
@@ -175,18 +185,30 @@ class _LyricsViewState extends State<LyricsView>
   /// 播放位置流：校准（seek / 换章 / 播放器回传）
   void _onPosition() {
     _timeSec = widget.player.currentPosition.inMilliseconds / 1000.0;
+    // 重置插值基准：下一个 tick 从校准点重新开始累计，避免位置流
+    // 滞后/回跳时插值继续沿着旧轨迹漂移
+    _lastTick = Duration.zero;
     if (mounted) setState(() {});
   }
 
   /// 高频时钟：在两次位置流之间插值，保证扫字/辉光平滑
   void _onTick(Duration elapsed) {
+    if (_lastTick == Duration.zero) {
+      // 刚被位置流校准：本帧只记录基准，不累加（避免一次性吞掉大 dt）
+      _lastTick = elapsed;
+      return;
+    }
     final dt = (elapsed - _lastTick).inMicroseconds / 1e6;
     _lastTick = elapsed;
     if (!_playing) return;
-    if (dt <= 0 || dt > 0.1) return;
-    _timeSec += dt * _rate;
+    if (dt <= 0) return;
+    // 单帧上限 0.25s：卡顿帧不丢弃也不暴走，继续累计
+    _timeSec += math.min(dt, 0.25) * _rate;
     if (mounted) setState(() {});
   }
+
+  /// 应用全局偏移后的"校准时间"（参与行索引与逐字点亮）
+  double get _t => _timeSec + _offsetMs / 1000.0;
 
   // ---------- 字幕加载 ----------
   void _maybeLoad() {
@@ -320,7 +342,7 @@ class _LyricsViewState extends State<LyricsView>
       builder: (context, constraints) {
         final railW = constraints.maxWidth;
         final railH = constraints.maxHeight;
-        final active = _activeIndexFor(lines, _timeSec);
+        final active = _activeIndexFor(lines, _t);
         final maxTextW = math.max(railW - 24, 80).toDouble();
 
         // 全量行高（≤40 行，走测量缓存）
@@ -461,6 +483,10 @@ class _LyricsViewState extends State<LyricsView>
     );
   }
 
+  /// 逐字点亮（folia MonetRailTokens 方案）：
+  /// 未唱到的字 = 暗色；正在唱的字 = 暗色→主题亮色渐变 + 辉光脉冲；
+  /// 唱过的字 = 主题亮色 + 辉光驻留缓慢衰减。
+  /// 时间分配：整句时间均分到每个字符（folia buildEvenGraphemeTimings 同款兜底）。
   Widget _lineContent(
     LyricLine line,
     bool isActive,
@@ -481,118 +507,82 @@ class _LyricsViewState extends State<LyricsView>
       );
     }
 
-    // 逐字扫字（folia MonetRailTokens 方案）：
-    // 底层整行暗字；上层整行亮字用横向渐变 mask 裁剪——
-    // 扫过的字全亮、正在扫的字渐变柔化、未扫的保持暗色。
-    final glow = _lineGlow(line);
-    final glowColor =
-        Color.lerp(_baseColor, _glowAccent, glow)!.withValues(alpha: 0.88 * glow);
-    final offsets = _charOffsets(line.text, maxTextW);
-    final sweepX = _sweepX(line, offsets);
-    final w = maxTextW;
-    final soft = _fontSize * 0.35; // 前缘柔化宽度（folia sweep edge softness）
-    final solidEnd = (sweepX - soft * 0.55).clamp(0.0, w);
-    final featherStart = (sweepX - soft * 0.2).clamp(0.0, w);
-    final featherEnd = (sweepX + soft).clamp(0.0, w);
-
-    final brightStyle = _textStyle(active: true).copyWith(
-      color: _brightColor,
-      shadows: glow > 0.02
-          ? [
-              Shadow(
-                color: glowColor,
-                blurRadius: _fontSize * 0.28,
-              ),
-              Shadow(
-                color: glowColor,
-                blurRadius: _fontSize * 0.65,
-              ),
-            ]
-          : null,
-    );
+    final text = line.text;
+    final t = _t;
+    final n = text.length;
+    final charDur = line.duration / math.max(n, 1);
+    // 行渲染结束时间：至少本行 end+1.05s，且不早于下一句开始（folia renderEndTime）
+    final lineEnd = line.end + 1.05;
+    final spans = <TextSpan>[];
+    for (var i = 0; i < n; i++) {
+      final s = line.start + charDur * i;
+      final e = i == n - 1 ? line.end : line.start + charDur * (i + 1);
+      final glow = _charGlow(t, s, e, lineEnd);
+      final status =
+          (t < s ? 0 : (t < e ? (t - s) / math.max(0.001, e - s) : 1))
+              .toDouble();
+      Color color;
+      if (status >= 1) {
+        // 唱过：主题亮色（folia resolvedBaseColor = wordColor）
+        color = _sungColor;
+      } else if (status > 0) {
+        // 正在唱：暗色 → 主题亮色渐变（folia mixColors(base, word, progress)）
+        color = Color.lerp(_baseColor, _sungColor, status)!;
+      } else {
+        color = _baseColor;
+      }
+      spans.add(TextSpan(
+        text: text[i],
+        style: TextStyle(
+          color: color,
+          shadows: glow > 0.02
+              ? [
+                  Shadow(
+                    color: Color.lerp(_baseColor, _glowAccent, glow)!
+                        .withValues(alpha: 0.85 * glow),
+                    blurRadius: _fontSize * 0.22,
+                  ),
+                  Shadow(
+                    color: Color.lerp(_baseColor, _glowAccent, glow)!
+                        .withValues(alpha: 0.6 * glow),
+                    blurRadius: _fontSize * 0.5,
+                  ),
+                ]
+              : null,
+        ),
+      ));
+    }
 
     return SizedBox(
       width: maxTextW,
       height: h,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: _glowPad),
-        child: Stack(
-          children: [
-            Text(line.text, style: _textStyle(active: true).copyWith(color: _baseColor)),
-            if (sweepX > 0.004)
-              ShaderMask(
-                shaderCallback: (rect) => LinearGradient(
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                  colors: [
-                    _brightColor,
-                    _brightColor,
-                    _brightColor.withValues(alpha: 0.92),
-                    Colors.transparent,
-                    Colors.transparent,
-                  ],
-                  stops: [
-                    0,
-                    w <= 0 ? 0 : solidEnd / w,
-                    w <= 0 ? 0 : featherStart / w,
-                    w <= 0 ? 0 : featherEnd / w,
-                    1,
-                  ],
-                ).createShader(rect),
-                blendMode: BlendMode.dstIn,
-                child: Text(line.text, style: brightStyle),
-              ),
-          ],
+        child: Text.rich(
+          TextSpan(children: spans),
+          style: _textStyle(active: true),
         ),
       ),
     );
   }
 
-  /// 测量每个字符的 x 起点（0..text.length，末位即总宽）
-  List<double> _charOffsets(String text, double maxWidth) {
-    final key = '$text|w${maxWidth.toStringAsFixed(1)}';
-    return _offsetCache.putIfAbsent(key, () {
-      final tp = TextPainter(
-        text: TextSpan(text: text, style: _textStyle(active: true)),
-        textDirection: TextDirection.ltr,
-      )..layout(maxWidth: maxWidth);
-      final out = <double>[];
-      for (var i = 0; i <= text.length; i++) {
-        final pos = tp.getOffsetForCaret(TextPosition(offset: i), Rect.zero);
-        out.add(pos.dx);
-      }
-      return out;
-    });
-  }
+  /// 唱过的字使用的主题亮色（介于白与主题色之间，folia wordColor 的移植）
+  Color get _sungColor =>
+      Color.lerp(_brightColor, _glowAccent, 0.5) ?? _brightColor;
 
-  /// 当前扫到的像素 x：句内时间按字均匀分配
-  /// （folia 对无逐字 timing 的 token 采用同款比例兜底）
-  double _sweepX(LyricLine line, List<double> offsets) {
-    final t = _timeSec;
-    final n = offsets.length - 1;
-    if (t <= line.start || n <= 0) return 0;
-    if (t >= line.end) return offsets[n];
-    final charDur = line.duration / n;
-    final idx = ((t - line.start) / charDur).clamp(0.0, n.toDouble());
-    final whole = idx.floor();
-    final frac = idx - whole;
-    if (whole >= n) return offsets[n];
-    return offsets[whole] + (offsets[whole + 1] - offsets[whole]) * frac;
-  }
-
-  /// 辉光强度：Smoothstep 起峰 + 平滑衰减（folia resolveMonetGlow）
-  double _lineGlow(LyricLine line) {
-    final t = _timeSec;
-    if (t <= line.start) return 0;
-    final rise = math.max(0.001, line.duration) * 1.18;
-    final peak = line.start + rise;
-    final tail = line.end + 1.05;
-    if (t <= peak) {
-      final p = ((t - line.start) / rise).clamp(0.0, 1.0).toDouble();
+  /// 逐字辉光强度：Smoothstep 起峰 + 驻留 + 衰减（folia resolveMonetGlow 移植，
+  /// tail 用行渲染结束时间，保证整行唱完前辉光不提前熄灭）
+  double _charGlow(double time, double start, double end, double lineEnd) {
+    if (time <= start) return 0;
+    final rise = math.max(0.001, end - start) * 1.18;
+    final peak = start + rise;
+    final tail = math.max(lineEnd, end + 1.05);
+    if (time <= peak) {
+      final p = ((time - start) / rise).clamp(0.0, 1.0).toDouble();
       return p * p * (3 - 2 * p);
     }
-    final remaining =
-        1 - ((t - peak) / math.max(0.18, tail - peak)).clamp(0.0, 1.0).toDouble();
+    final remaining = 1 -
+        ((time - peak) / math.max(0.18, tail - peak)).clamp(0.0, 1.0).toDouble();
     return remaining * remaining * (3 - 2 * remaining);
   }
 
