@@ -56,6 +56,9 @@ class _LyricsViewState extends State<LyricsView>
   /// 文本行高测量缓存（文本 + 宽度 -> 高度）
   final Map<String, double> _heightCache = {};
 
+  /// 逐字 x 位置缓存（当前行扫字用）
+  final Map<String, List<double>> _offsetCache = {};
+
   // ---------- 生命周期 ----------
   @override
   void initState() {
@@ -270,10 +273,11 @@ class _LyricsViewState extends State<LyricsView>
     );
   }
 
-  /// 行的垂直位置：当前行居中，其余行按行高与间距依次排布
+  /// 行的垂直位置：当前行居中（焦点略偏上，folia focusCenterY ≈ 0.46），
+  /// 其余行按行高与间距依次排布
   /// [hs] 是窗口 [first..last] 的相对行高列表
   double _topFor(int i, int active, int first, List<double> hs, double railH) {
-    final centerY = railH / 2;
+    final centerY = railH * 0.46;
     final activeH = hs[active - first];
     if (i == active) return centerY - activeH / 2;
     if (i > active) {
@@ -378,11 +382,35 @@ class _LyricsViewState extends State<LyricsView>
       );
     }
 
-    final progress = _lineProgress(line);
+    // 逐字扫字（folia MonetRailTokens 方案）：
+    // 底层整行暗字；上层整行亮字用横向渐变 mask 裁剪——
+    // 扫过的字全亮、正在扫的字渐变柔化、未扫的保持暗色。
     final glow = _lineGlow(line);
-    final fillColor = Color.lerp(_baseColor, _brightColor, progress)!;
     final glowColor =
         Color.lerp(_baseColor, _glowAccent, glow)!.withValues(alpha: 0.88 * glow);
+    final offsets = _charOffsets(line.text, maxTextW);
+    final sweepX = _sweepX(line, offsets);
+    final w = maxTextW;
+    final soft = _fontSize * 0.35; // 前缘柔化宽度（folia sweep edge softness）
+    final solidEnd = (sweepX - soft * 0.55).clamp(0.0, w);
+    final featherStart = (sweepX - soft * 0.2).clamp(0.0, w);
+    final featherEnd = (sweepX + soft).clamp(0.0, w);
+
+    final brightStyle = _textStyle(active: true).copyWith(
+      color: _brightColor,
+      shadows: glow > 0.02
+          ? [
+              Shadow(
+                color: glowColor,
+                blurRadius: _fontSize * 0.28,
+              ),
+              Shadow(
+                color: glowColor,
+                blurRadius: _fontSize * 0.65,
+              ),
+            ]
+          : null,
+    );
 
     return SizedBox(
       width: maxTextW,
@@ -392,30 +420,28 @@ class _LyricsViewState extends State<LyricsView>
         child: Stack(
           children: [
             Text(line.text, style: _textStyle(active: true).copyWith(color: _baseColor)),
-            if (progress > 0.004)
-              ClipRect(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  widthFactor: progress.clamp(0.0, 1.0).toDouble(),
-                  child: Text(
-                    line.text,
-                    style: _textStyle(active: true).copyWith(
-                      color: fillColor,
-                      shadows: glow > 0.02
-                          ? [
-                              Shadow(
-                                color: glowColor,
-                                blurRadius: _fontSize * 0.28,
-                              ),
-                              Shadow(
-                                color: glowColor,
-                                blurRadius: _fontSize * 0.65,
-                              ),
-                            ]
-                          : null,
-                    ),
-                  ),
-                ),
+            if (sweepX > 0.004)
+              ShaderMask(
+                shaderCallback: (rect) => LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    _brightColor,
+                    _brightColor,
+                    _brightColor.withValues(alpha: 0.92),
+                    Colors.transparent,
+                    Colors.transparent,
+                  ],
+                  stops: [
+                    0,
+                    w <= 0 ? 0 : solidEnd / w,
+                    w <= 0 ? 0 : featherStart / w,
+                    w <= 0 ? 0 : featherEnd / w,
+                    1,
+                  ],
+                ).createShader(rect),
+                blendMode: BlendMode.dstIn,
+                child: Text(line.text, style: brightStyle),
               ),
           ],
         ),
@@ -423,12 +449,36 @@ class _LyricsViewState extends State<LyricsView>
     );
   }
 
-  /// 扫字进度：本行内按时间线性插值（folia resolveMonetFillWidth 的整行近似）
-  double _lineProgress(LyricLine line) {
+  /// 测量每个字符的 x 起点（0..text.length，末位即总宽）
+  List<double> _charOffsets(String text, double maxWidth) {
+    final key = '$text|w${maxWidth.toStringAsFixed(1)}';
+    return _offsetCache.putIfAbsent(key, () {
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: _textStyle(active: true)),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: maxWidth);
+      final out = <double>[];
+      for (var i = 0; i <= text.length; i++) {
+        final pos = tp.getOffsetForCaret(TextPosition(offset: i), Rect.zero);
+        out.add(pos.dx);
+      }
+      return out;
+    });
+  }
+
+  /// 当前扫到的像素 x：句内时间按字均匀分配
+  /// （folia 对无逐字 timing 的 token 采用同款比例兜底）
+  double _sweepX(LyricLine line, List<double> offsets) {
     final t = _timeSec;
-    if (t <= line.start) return 0;
-    if (t >= line.end) return 1;
-    return (t - line.start) / line.duration;
+    final n = offsets.length - 1;
+    if (t <= line.start || n <= 0) return 0;
+    if (t >= line.end) return offsets[n];
+    final charDur = line.duration / n;
+    final idx = ((t - line.start) / charDur).clamp(0.0, n.toDouble());
+    final whole = idx.floor();
+    final frac = idx - whole;
+    if (whole >= n) return offsets[n];
+    return offsets[whole] + (offsets[whole + 1] - offsets[whole]) * frac;
   }
 
   /// 辉光强度：Smoothstep 起峰 + 平滑衰减（folia resolveMonetGlow）
