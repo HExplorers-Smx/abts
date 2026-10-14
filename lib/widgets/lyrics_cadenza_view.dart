@@ -16,11 +16,14 @@ import '../services/lyrics_parser.dart';
 /// folia-major「Cadenza 华彩」散落式歌词视图的 Flutter 移植。
 ///
 /// 核心视觉（对应 folia cadenzaPlacements / cadenzaEnvelopes）：
-/// - 同时显示前 1 句 + 当前句 + 后 1 句，每句按标点/空格切意群（chunk）；
-/// - 每个意群按「行带 + 种子随机」散布到整屏（不同位置、大小、旋转），
-///   当前句的「强调意群」（hero）放大居中，其余围绕避让；
-/// - 当前句逐字点亮 + 辉光（getClassicCharGlow）；唱过意群 5s 缓动外漂旋转淡出；
-/// - 点击任意意群跳转该句，点空白切回封面，长按调全局偏移。
+/// - 同时显示前 1 句 + 当前句 + 后 1 句，每句拆成词/字碎片（folia
+///   cadenzaFragments：CJK 逐字、英文整词）；
+/// - 碎片保持句序在行内铺开 + 种子微扰 + 碰撞避让（folia
+///   cadenzaPlacements），当前句时间居中的碎片为 hero，放大居中；
+/// - 渲染按 folia cadenzaEnvelopes 状态机：waiting 暗色 → active 混色渐入 +
+///   辉光（getClassicKeyframedGlow）→ passed 沿屏幕中心外漂 + 旋转 + 行级淡出；
+/// - 词级时间戳存在时逐字跟读，无词级数据回退句内均分；
+/// - 点击任意碎片跳转该句，点空白切回封面，长按调全局偏移。
 class LyricsCadenzaView extends StatefulWidget {
   const LyricsCadenzaView({
     super.key,
@@ -75,7 +78,6 @@ class _Placement {
 class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     with SingleTickerProviderStateMixin {
   static const double _fontSize = 21;
-  static const double _heroScale = 1.32;
   static const double _lineHeight = 1.3;
 
   // ---------- 时间驱动 ----------
@@ -238,23 +240,56 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     return ans;
   }
 
-  /// 按标点/空格切意群；长意群从中部均衡切开（避免 12+1 的怪切法）
-  List<String> _splitChunks(String text) {
-    final parts = text
-        .split(RegExp(r'[，。！？；：、,.!?;:…—～\s]+'))
-        .where((s) => s.isNotEmpty)
-        .toList();
-    if (parts.isEmpty) return [text];
-    final chunks = <String>[];
-    for (var p in parts) {
-      while (p.length > 11) {
-        final cut = p.length > 15 ? 8 : p.length ~/ 2;
-        chunks.add(p.substring(0, cut));
-        p = p.substring(cut);
+  /// 歌词碎片（folia cadenzaFragments 的中文适配）：
+  /// CJK 字符逐字散落，英文/数字整词保留，标点独立成片。
+  List<String> _fragmentsOf(String text) {
+    final frags = <String>[];
+    final cjk = RegExp(r'[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]');
+    final alnum = RegExp(r'[a-zA-Z0-9]');
+    var i = 0;
+    while (i < text.length) {
+      final ch = text[i];
+      if (cjk.hasMatch(ch)) {
+        frags.add(ch);
+        i++;
+      } else if (alnum.hasMatch(ch)) {
+        var j = i + 1;
+        while (j < text.length && alnum.hasMatch(text[j])) {
+          j++;
+        }
+        frags.add(text.substring(i, j));
+        i = j;
+      } else {
+        if (ch.trim().isNotEmpty) frags.add(ch);
+        i++;
       }
-      if (p.isNotEmpty) chunks.add(p);
     }
-    return chunks;
+    return frags;
+  }
+
+  /// 每个碎片的 (start, end) 时间：
+  /// 词级时间戳与碎片 1:1（逐字识别）时用真实字时间；否则句内按字数均分。
+  List<({double s, double e})> _fragTimes(
+      LyricLine line, List<String> frags) {
+    final words = line.words;
+    if (words != null && words.length == frags.length) {
+      final out = <({double s, double e})>[];
+      for (var i = 0; i < frags.length; i++) {
+        out.add((s: words[i].start, e: words[i].end));
+      }
+      return out;
+    }
+    final totalChars = frags.fold<int>(0, (a, f) => a + f.length);
+    final per = line.duration / math.max(totalChars, 1);
+    final out = <({double s, double e})>[];
+    var acc = line.start;
+    for (final f in frags) {
+      final fs = acc;
+      final fe = fs + per * f.length;
+      out.add((s: fs, e: fe));
+      acc = fe;
+    }
+    return out;
   }
 
   TextStyle _textStyle({bool bold = false}) => TextStyle(
@@ -285,9 +320,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
   double _easeInOutQuad(double x) =>
       x < 0.5 ? 2 * x * x : 1 - math.pow(-2 * x + 2, 2).toDouble() / 2;
 
-  double _smoothstep(double x) => x * x * (3 - 2 * x);
-
-  // ---------- 布局（folia cadenzaPlacements 移植 + 全屏散布） ----------
+  // ---------- 布局（folia cadenzaPlacements 移植：词/字碎片 + hero 居中） ----------
   List<_Placement> _buildPlacements(
       List<LyricLine> lines, int active, double w, double h) {
     final placements = <_Placement>[];
@@ -309,131 +342,115 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       ));
     }
 
-    // 每句切意群
-    final lineChunks = <List<String>>[];
-    for (var i = math.max(0, active - 1);
-        i <= math.min(lines.length - 1, active + 1);
-        i++) {
-      lineChunks.add(_splitChunks(lines[i].text));
-    }
-
-    // hero = 当前句的中间意群（放大突出）
-    final heroText = lineChunks.length > 1 && lineChunks[1].isNotEmpty
-        ? lineChunks[1][lineChunks[1].length ~/ 2]
-        : null;
-    var heroStart = 0.0, heroEnd = 0.0;
-
-    final centerX = w / 2, centerY = h / 2;
-    final maxR = math.max(h * 0.55, 130).toDouble();
-    final step = math.max(10, _fontSize * 0.14).round();
-
-    // 第一遍：hero 居中占位
-    for (var wi = 0; wi < lineChunks.length; wi++) {
+    // 三行碎片：前 1 句 / 当前句 / 后 1 句（folia 同屏展示三行）
+    final rows =
+        <({int li, List<String> frags, List<({double s, double e})> times})>[];
+    for (var wi = 0; wi < 3; wi++) {
       final li = math.max(0, active - 1) + wi;
-      final status = li < active ? -1 : (li > active ? 1 : 0);
-      final chunks = lineChunks[wi];
-      if (chunks.isEmpty) continue;
+      if (li < 0 || li >= lines.length) continue;
       final line = lines[li];
-      final totalChars = chunks.fold<int>(0, (a, c) => a + c.length);
-      for (var ci = 0; ci < chunks.length; ci++) {
-        if (status != 0 || chunks[ci] != heroText) continue;
-        final cw = _measureWidth(chunks[ci]);
-        final chH = _fontSize * _lineHeight;
-        final chunkStart = line.start +
-            line.duration *
-                (ci == 0
-                    ? 0
-                    : chunks.take(ci).fold<int>(0, (a, c) => a + c.length)) /
-                totalChars;
-        heroStart = chunkStart;
-        heroEnd = chunkStart + line.duration * chunks[ci].length / totalChars;
-        occupy(centerX, centerY, cw * _heroScale, chH * _heroScale, 14);
+      final frags = _fragmentsOf(line.text);
+      if (frags.isEmpty) continue;
+      rows.add((li: li, frags: frags, times: _fragTimes(line, frags)));
+    }
+    if (rows.isEmpty) return placements;
+
+    // 当前行（folia 主行）
+    var curRowIdx = -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].li == active) {
+        curRowIdx = i;
         break;
       }
     }
+    if (curRowIdx < 0) curRowIdx = rows.length - 1;
+    final curRow = rows[curRowIdx];
 
-    // 第二遍：其余意群按「行带 + 种子」散布，围绕 hero 螺旋避让
-    for (var wi = 0; wi < lineChunks.length; wi++) {
-      final li = math.max(0, active - 1) + wi;
-      final line = lines[li];
-      final status = li < active ? -1 : (li > active ? 1 : 0);
-      final chunks = lineChunks[wi];
-      if (chunks.isEmpty) continue;
-      final totalChars = chunks.fold<int>(0, (a, c) => a + c.length);
+    // hero = 当前行时间居中的碎片（folia 中心偏置强调 → 放大 1.46 居中）
+    final heroIdx = curRow.frags.length ~/ 2;
+    final heroText = curRow.frags[heroIdx];
+    const heroScale = 1.46;
+    final heroW = _measureWidth(heroText) * heroScale;
+    final heroH = _fontSize * _lineHeight * heroScale;
 
-      // 行带：前句上带、当前句中央带、后句下带
-      final band = status < 0
-          ? (-0.52 * h, -0.17 * h)
-          : status > 0
-              ? (0.17 * h, 0.52 * h)
-              : (-0.15 * h, 0.15 * h);
+    // 1) hero 先占位居中
+    occupy(0, 0, heroW, heroH, 12);
+    placements.add(_Placement(
+      text: heroText,
+      lineIndex: curRow.li,
+      start: curRow.times[heroIdx].s,
+      end: curRow.times[heroIdx].e,
+      width: heroW,
+      height: heroH,
+      x: 0,
+      y: 0,
+      scale: heroScale,
+      rotate: 0,
+      passedRotate: -8,
+      driftX: 0.6,
+      driftY: -0.4,
+      hero: true,
+    ));
 
-      for (var ci = 0; ci < chunks.length; ci++) {
-        final text = chunks[ci];
-        final cw = _measureWidth(text);
-        final chH = _fontSize * _lineHeight;
-        final isHero = status == 0 && text == heroText;
-        final seed = li * 31 + ci * 13 + 7;
+    // 2) 其余碎片：按句序在行内铺开（保持原句读顺序），种子微扰 + hero 推挤 +
+    //    螺旋搜索避让碰撞；passed 漂移方向 = 从屏幕中心向外
+    final rowGap = _fontSize * _lineHeight * 1.6;
+    final spacing = _fontSize * 0.5;
+    final maxR = math.max(h * 0.5, 120).toDouble();
+    final step = math.max(10, _fontSize * 0.14).round();
+
+    for (var ri = 0; ri < rows.length; ri++) {
+      final row = rows[ri];
+      final rowOffsetY = row.li < active
+          ? -rowGap
+          : (row.li > active ? rowGap : 0.0);
+
+      // 行内宽度与每片缩放（非 hero 微随机，形成大小差异的散落感）
+      final scales = <double>[];
+      var totalW = 0.0;
+      for (var i = 0; i < row.frags.length; i++) {
+        final isHero = ri == curRowIdx && i == heroIdx;
+        final sc = isHero
+            ? heroScale
+            : 0.92 + _randOf(row.li * 31 + i * 13 + 7, 8) * 0.16;
+        scales.add(sc);
+        totalW +=
+            _measureWidth(row.frags[i]) * sc + (i == 0 ? 0 : spacing);
+      }
+      var xPos = -totalW / 2;
+
+      for (var i = 0; i < row.frags.length; i++) {
+        if (ri == curRowIdx && i == heroIdx) continue; // hero 已放置
+        final text = row.frags[i];
+        final sc = scales[i];
+        final cw = _measureWidth(text) * sc;
+        final chH = _fontSize * _lineHeight * sc;
+        final seed = row.li * 31 + i * 13 + 7;
         double rand(double o) {
           final x = math.sin(seed + o) * 10000;
           return x - x.floorToDouble();
         }
 
-        final scale = isHero
-            ? _heroScale
-            : status == 0
-                ? 0.95 + rand(7) * 0.18
-                : 0.8 + rand(8) * 0.12;
-        final cwScaled = cw * scale, chScaled = chH * scale;
-        final chunkStart = line.start +
-            line.duration *
-                (ci == 0
-                    ? 0
-                    : chunks.take(ci).fold<int>(0, (a, c) => a + c.length)) /
-                totalChars;
-        final chunkEnd = chunkStart + line.duration * text.length / totalChars;
+        // 目标点：行序 x + 种子微扰（folia 保持句序，碰撞推挤制造错落）
+        var px = xPos + cw / 2 + (rand(5) - 0.5) * _fontSize * 0.7;
+        var py = rowOffsetY + (rand(6) - 0.5) * _fontSize * 0.5;
 
-        if (isHero) {
-          placements.add(_Placement(
-            text: text,
-            lineIndex: li,
-            start: heroStart,
-            end: heroEnd,
-            width: cwScaled,
-            height: chScaled,
-            x: 0,
-            y: 0,
-            scale: scale,
-            rotate: 0,
-            passedRotate: 0,
-            driftX: 0.6,
-            driftY: -0.4,
-            hero: true,
-          ));
-          continue;
-        }
-
-        // 目标点：行带内全宽散布 + 种子扰动
-        final tx = (rand(5) - 0.5) * w * 0.74;
-        final ty = band.$1 + rand(6) * (band.$2 - band.$1);
-        var px = tx, py = ty;
-
-        // 与 hero 的避让推挤（围绕感）
+        // 与 hero 的推挤分离（folia minHeroSeparation）
         final hd = math.sqrt(px * px + py * py);
-        final minSep = _fontSize * _heroScale * 2.2 + cwScaled * 0.5;
-        if (heroText != null && hd < minSep && hd > 0.01) {
+        final minSep = heroW * 0.34 + cw * 0.52 + 12;
+        if (hd < minSep && hd > 0.01) {
           px += px / hd * (minSep - hd);
-          py += py / hd * (minSep - hd) * 0.9;
+          py += py / hd * (minSep - hd) * 0.92;
         }
 
-        // 螺旋搜索避让碰撞；兜底 = 边界内位移最小
-        final baseAngle = math.atan2(py, px + cwScaled / 2);
+        // 螺旋搜索避让碰撞；兜底 = 边界内重叠最小
+        final baseAngle = math.atan2(py, px + cw / 2);
         var chosenX = px, chosenY = py, found = false;
         var fallbackX = px
-            .clamp(-w / 2 + cwScaled / 2 + w * 0.06, w / 2 - cwScaled / 2 - w * 0.06)
+            .clamp(-w / 2 + cw / 2 + w * 0.05, w / 2 - cw / 2 - w * 0.05)
             .toDouble();
         var fallbackY = py
-            .clamp(-h / 2 + chScaled / 2 + h * 0.04, h / 2 - chScaled / 2 - h * 0.04)
+            .clamp(-h / 2 + chH / 2 + h * 0.04, h / 2 - chH / 2 - h * 0.04)
             .toDouble();
         var fallbackScore = double.infinity;
         for (var radius = 0; radius <= maxR && !found; radius += step) {
@@ -444,10 +461,11 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             final angle = baseAngle + (si / samples) * math.pi * 2;
             final rx = math.cos(angle) * radius;
             final ry = math.sin(angle) * radius * 0.92;
-            final l = centerX + px + rx - cwScaled / 2;
-            final t = centerY + py + ry - chScaled / 2;
-            final r = l + cwScaled, b = t + chScaled;
-            if (l < w * 0.06 || r > w * 0.94 || t < h * 0.04 || b > h * 0.96) {
+            final l = px + rx - cw / 2;
+            final t = py + ry - chH / 2;
+            final r = l + cw, b = t + chH;
+            if (l < -w / 2 + cw * 0.3 || r > w / 2 - cw * 0.3 ||
+                t < -h / 2 + chH * 0.3 || b > h / 2 - chH * 0.3) {
               continue;
             }
             final travel = math.sqrt(rx * rx + ry * ry);
@@ -468,8 +486,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             }
             chosenX = px + rx;
             chosenY = py + ry;
-            occupy(centerX + chosenX, centerY + chosenY, cwScaled, chScaled,
-                status == 0 ? 8 : 6);
+            occupy(chosenX, chosenY, cw, chH, 5);
             found = true;
             break;
           }
@@ -477,31 +494,37 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
         if (!found) {
           chosenX = fallbackX;
           chosenY = fallbackY;
-          occupy(centerX + chosenX, centerY + chosenY, cwScaled, chScaled, 6);
+          occupy(chosenX, chosenY, cw, chH, 5);
         }
 
-        // 漂移方向：从屏幕中心向外
-        final outX = chosenX + cwScaled / 2, outY = chosenY - chScaled * 0.4;
+        // 漂移方向：从屏幕中心向外（folia outwardUnit）
+        final outX = chosenX + cw / 2, outY = chosenY - chH * 0.46;
         final len = math.max(math.sqrt(outX * outX + outY * outY), 1);
         placements.add(_Placement(
           text: text,
-          lineIndex: li,
-          start: chunkStart,
-          end: chunkEnd,
-          width: cwScaled,
-          height: chScaled,
+          lineIndex: row.li,
+          start: row.times[i].s,
+          end: row.times[i].e,
+          width: cw,
+          height: chH,
           x: chosenX,
           y: chosenY,
-          scale: scale,
-          rotate: (rand(3) - 0.5) * 8,
-          passedRotate: (rand(4) - 0.5) * 14,
+          scale: sc,
+          rotate: 0,
+          passedRotate: (rand(3) - 0.5) * 16,
           driftX: outX / len,
           driftY: outY / len * 0.72,
           hero: false,
         ));
+        xPos += cw + spacing;
       }
     }
     return placements;
+  }
+
+  double _randOf(int seed, double o) {
+    final x = math.sin(seed + o) * 10000;
+    return x - x.floorToDouble();
   }
 
   // ---------- 构建 ----------
@@ -605,38 +628,81 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     );
   }
 
+  /// 词/字碎片渲染（folia cadenzaEnvelopes 状态机）：
+  /// waiting（未唱）暗色小字 → active（正在唱）混色渐入 + 辉光 → passed（唱过）
+  /// 沿屏幕中心向外漂移 + 旋转 + 行级淡出；hero 词放大突出。
   Widget _buildChunk(
       _Placement p, List<LyricLine> lines, int active, double w, double h) {
     final line = lines[p.lineIndex];
     final t = _t;
-    final drift = p.lineIndex < active
+    final isActiveLine = p.lineIndex == active;
+    final isBefore = p.lineIndex < active;
+
+    // passed 漂移进度（folia getClassicPassedDrift：5s easeInOutQuad）
+    final drift = isBefore
         ? _easeInOutQuad(((t - line.end) / 5).clamp(0.0, 1.0).toDouble())
         : 0.0;
-    final dx = p.x + p.driftX * 46 * drift;
-    final dy = p.y + p.driftY * 46 * drift;
-    final rotate = p.rotate + p.passedRotate * drift;
-    final isActiveLine = p.lineIndex == active;
+    final dx = p.x + p.driftX * 55 * drift;
+    final dy = p.y + p.driftY * 55 * drift;
+    final rotate = p.passedRotate * drift; // folia 基础不旋转，唱过才转
 
-    Widget child;
-    if (isActiveLine) {
-      child = _activeChunk(p, t);
+    // 碎片状态机（folia getWordStatus / getWordProgress / getClassicBodyMix）
+    double mix; // 0 = 未唱暗色，1 = 唱完亮色
+    double glow;
+    if (t < p.start) {
+      mix = 0;
+      glow = 0;
+    } else if (t <= p.end) {
+      final dur = math.max(p.end - p.start, 0.045);
+      final prog = ((t - p.start) / dur).clamp(0.0, 1.0).toDouble();
+      mix = prog;
+      glow = _keyframedGlow(prog);
     } else {
-      final baseAlpha = p.lineIndex < active
-          ? (0.5 * (1 - drift * 0.55)).clamp(0.18, 0.5).toDouble()
-          : 0.55;
-      child = Text(
-        p.text,
-        softWrap: false,
-        overflow: TextOverflow.visible,
-        style: _textStyle().copyWith(
-          color: _baseColor.withValues(alpha: baseAlpha),
-          fontSize: _fontSize * p.scale,
-          fontWeight: p.hero ? FontWeight.w700 : FontWeight.w500,
-        ),
-      );
+      final fadeDur = isBefore ? 0.9 : 5.0;
+      final fade = math
+          .pow(1 - ((t - p.end) / fadeDur).clamp(0.0, 1.0).toDouble(), 2)
+          .toDouble();
+      mix = 1;
+      glow = 0.9 * fade;
     }
 
-    // 不定宽高（不裁剪），left/top 定位
+    // 行级包络：当前行最亮；后句弱化等待；前句随漂移淡出
+    final alpha = isActiveLine
+        ? 1.0
+        : (isBefore
+            ? (1 - drift * 0.92).clamp(0.15, 1.0).toDouble()
+            : 0.7);
+
+    // 颜色：未唱主题暗色 → 正在唱渐入主题亮色（folia bodyMix）
+    final color = Color.lerp(_baseColor, _sungColor, mix) ?? _baseColor;
+    final fs = _fontSize * p.scale;
+
+    final child = Text(
+      p.text,
+      softWrap: false,
+      overflow: TextOverflow.visible,
+      style: TextStyle(
+        fontSize: fs,
+        height: _lineHeight,
+        fontWeight: p.hero ? FontWeight.w700 : FontWeight.w600,
+        color: color.withValues(alpha: alpha),
+        shadows: glow > 0.02
+            ? [
+                Shadow(
+                  color: Color.lerp(_baseColor, _glowAccent, glow)!
+                      .withValues(alpha: 0.9 * glow),
+                  blurRadius: fs * 0.22,
+                ),
+                Shadow(
+                  color: Color.lerp(_baseColor, _glowAccent, glow)!
+                      .withValues(alpha: 0.65 * glow),
+                  blurRadius: fs * 0.5,
+                ),
+              ]
+            : null,
+      ),
+    );
+
     return Positioned(
       left: w / 2 + dx - p.width / 2,
       top: h / 2 + dy - p.height / 2,
@@ -651,138 +717,15 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     );
   }
 
-  /// 当前句意群：逐字点亮 + 辉光（folia getClassicCharGlow 移植）
-  ///
-  /// 有词级时间戳（百度字幕模型 words_info）时每个字符按真实词时间点亮，
-  /// 词与声音严格同步；无词级数据时回退句内字数均分（近似扫字）。
-  Widget _activeChunk(_Placement p, double t) {
-    final text = p.text;
-    final n = text.length;
-    if (n == 0) return const SizedBox.shrink();
-    final timings = _charTimingsForChunk(p, text);
-    final spans = <TextSpan>[];
-    final fs = _fontSize * p.scale;
-    for (var i = 0; i < n; i++) {
-      final s = timings[i].s;
-      final e = timings[i].e;
-      final glow = _charGlow(t, s, e);
-      final status = (t < s
-              ? 0.0
-              : t < e
-                  ? (t - s) / math.max(0.001, e - s)
-                  : 1.0)
-          .toDouble();
-      final color = status >= 1
-          ? _sungColor
-          : status > 0
-              ? Color.lerp(_baseColor, _sungColor, status)!
-              : _baseColor;
-      spans.add(TextSpan(
-        text: text[i],
-        style: TextStyle(
-          fontSize: fs,
-          height: _lineHeight,
-          fontWeight: p.hero ? FontWeight.w700 : FontWeight.w600,
-          color: color,
-          shadows: glow > 0.02
-              ? [
-                  Shadow(
-                    color: Color.lerp(_baseColor, _glowAccent, glow)!
-                        .withValues(alpha: 0.9 * glow),
-                    blurRadius: fs * 0.22,
-                  ),
-                  Shadow(
-                    color: Color.lerp(_baseColor, _glowAccent, glow)!
-                        .withValues(alpha: 0.65 * glow),
-                    blurRadius: fs * 0.5,
-                  ),
-                ]
-              : null,
-        ),
-      ));
-    }
-    return Text.rich(
-      TextSpan(children: spans),
-      textAlign: TextAlign.center,
-      softWrap: false,
-      overflow: TextOverflow.visible,
-      style: TextStyle(fontSize: fs, height: _lineHeight),
-    );
+  /// folia getClassicKeyframedGlow：30% 冲高、70% 回落
+  double _keyframedGlow(double progress) {
+    if (progress <= 0 || progress >= 1) return 0;
+    if (progress < 0.3) return _easeOutCubic(progress / 0.3);
+    return 1 - ((progress - 0.3) / 0.7).clamp(0.0, 1.0);
   }
 
-  /// 意群内逐字符时间。优先用词级时间戳：
-  /// 把每个词的时间按词内字符数均分，通过"非空格字符流"对齐到意群文本
-  /// 中的字符；空格与未覆盖字符（标点等）回退句均分，保证不越界不重叠。
-  List<({double s, double e})> _charTimingsForChunk(_Placement p, String text) {
-    final n = text.length;
-    final charDur = math.max((p.end - p.start), 0.05) / n;
-    final fallback = <({double s, double e})>[];
-    for (var i = 0; i < n; i++) {
-      fallback.add((
-        s: p.start + charDur * i,
-        e: i == n - 1 ? p.end : p.start + charDur * (i + 1),
-      ));
-    }
-    final lines = _lines;
-    final line = lines != null && p.lineIndex >= 0 && p.lineIndex < lines.length
-        ? lines[p.lineIndex]
-        : null;
-    final words = line?.words;
-    if (words == null || words.isEmpty) return fallback;
-
-    // 非空格字符流对齐（词拼接与句文本去空格后一致，ASR 层已校验）
-    final textWs = text.replaceAll(' ', '');
-    final lineWs = line!.text.replaceAll(' ', '');
-    final offWs = lineWs.indexOf(textWs);
-    final nonSpaceIdx = <int>[];
-    for (var i = 0; i < n; i++) {
-      if (text[i] != ' ') nonSpaceIdx.add(i);
-    }
-    if (offWs < 0 || nonSpaceIdx.length != textWs.length) return fallback;
-
-    final mapping = List<({double s, double e})>.filled(
-        n, (s: 0, e: 0), growable: false);
-    var wordStreamPos = 0;
-    for (final w in words) {
-      final wlen = w.word.replaceAll(' ', '').length;
-      if (wlen <= 0) continue;
-      final ws = wordStreamPos;
-      wordStreamPos += wlen;
-      final we = wordStreamPos;
-      final lo = math.max(ws, offWs);
-      final hi = math.min(we, offWs + textWs.length);
-      if (lo >= hi) continue;
-      final dur = w.duration / wlen;
-      for (var pos = lo; pos < hi; pos++) {
-        final chunkIdx = nonSpaceIdx[pos - offWs];
-        final inWord = pos - ws;
-        mapping[chunkIdx] = (
-          s: w.start + dur * inWord,
-          e: inWord == wlen - 1
-              ? w.end
-              : w.start + dur * (inWord + 1),
-        );
-      }
-    }
-    for (var i = 0; i < n; i++) {
-      if (mapping[i].s == 0 && mapping[i].e == 0) mapping[i] = fallback[i];
-    }
-    return mapping;
-  }
-
-  double _charGlow(double time, double start, double end) {
-    if (time <= start) return 0;
-    final anim = 6 * math.max(end - start, 0.001);
-    final elapsed = time - start;
-    if (elapsed < anim) {
-      final x = (elapsed / anim).clamp(0.0, 1.0).toDouble();
-      return _smoothstep(x);
-    }
-    if (time <= end) return 1;
-    final fade = math.pow(1 - ((time - end) / 0.9).clamp(0.0, 1.0).toDouble(), 2)
-        .toDouble();
-    return fade;
-  }
+  double _easeOutCubic(double x) =>
+      1 - math.pow(1 - x.clamp(0.0, 1.0).toDouble(), 3).toDouble();
 
   void _seekToLine(int lineIndex, List<LyricLine> lines) {
     _timeSec = lines[lineIndex].start;
