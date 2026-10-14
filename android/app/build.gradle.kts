@@ -70,3 +70,9 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // FileProvider（安装 APK 兜底通道）与各 Flutter 插件共同依赖 androidx.core。
+    // 显式声明，避免只靠插件传递依赖时编译期不可解析。
+    implementation("androidx.core:core-ktx:1.13.1")
+}
