@@ -146,24 +146,46 @@ class LocalLibrary {
     return _copyBook(book, chapters: chapters);
   }
 
-  /// 自动生成章节文稿：网易云歌词匹配 → 百度语音转写（可选）
+  /// 自动生成章节文稿：网易云歌词匹配 → 百度语音转写（可选）。
+  /// 网易云 LRC 只有行级时间戳，字级跟声需要词级时间戳，
+  /// 因此配置了百度转写时，无论是否匹配到 LRC 都尝试升级为词级文稿。
   Future<void> _autoLyrics(File audioFile, String fileName) async {
     try {
-      if (await LyricMatcher.matchAndSave(audioFile, fileName)) return;
+      await LyricMatcher.matchAndSave(audioFile, fileName);
+      await upgradeLyricsToWordLevel(audioFile);
+    } catch (e) {
+      debugPrint('[LocalLibrary] 自动文稿生成失败（忽略）: $e');
+    }
+  }
+
+  /// 无词级文稿 → 百度转写升级为词级（v2）。
+  /// 仅当文稿存在、且不含词级时间戳、且已配置百度转写时触发；
+  /// 转写结果含词级时间戳才覆盖保存。返回是否升级成功。
+  Future<bool> upgradeLyricsToWordLevel(File audioFile) async {
+    try {
+      final existing = LyricsParser.readLyricsFile(audioFile);
+      if (existing == null || existing.isEmpty) return false;
+      final hasWord = existing
+          .any((l) => l.words != null && l.words!.isNotEmpty);
+      if (hasWord) return false; // 已有词级时间戳，不重复转写
       final cfg = await BaiduAsr.loadConfig();
-      if (!cfg.isConfigured || !cfg.enabled) return;
-      if (LyricsParser.lyricsFileExists(audioFile)) return;
+      if (!cfg.isConfigured || !cfg.enabled) return false;
       final lines = await BaiduAsr.transcribe(
         audioFile,
         apiKey: cfg.apiKey,
         secretKey: cfg.secretKey,
       );
-      if (lines == null || lines.isEmpty) return;
+      if (lines == null || lines.isEmpty) return false;
+      if (!lines.any((l) => l.words != null && l.words!.isNotEmpty)) {
+        return false; // 转写没有词级时间戳，保留原文稿
+      }
       await LyricsParser.saveLyricsFile(audioFile, lines);
-      debugPrint('[LocalLibrary] 百度转写文稿已生成: '
+      debugPrint('[LocalLibrary] 词级文稿升级完成: '
           '${audioFile.path} (${lines.length} 行)');
+      return true;
     } catch (e) {
-      debugPrint('[LocalLibrary] 自动文稿生成失败（忽略）: $e');
+      debugPrint('[LocalLibrary] 词级文稿升级失败（忽略）: $e');
+      return false;
     }
   }
 

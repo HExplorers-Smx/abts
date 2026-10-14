@@ -11,6 +11,7 @@ import '../models/lyric_line.dart';
 import '../player/book_player.dart';
 import '../services/bili_api.dart';
 import '../services/download_store.dart';
+import '../services/local_library.dart';
 import '../services/lyrics_parser.dart';
 
 /// folia-major「Cadenza 华彩」散落式歌词视图的 Flutter 移植。
@@ -94,6 +95,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
   bool _loading = false;
   String? _error;
   bool _noLyrics = false;
+  bool _upgrading = false; // 正在后台生成词级文稿（行级 LRC → 词级转写）
 
   // 布局缓存（窗口行变化时重算）
   int _layoutLineIndex = -1;
@@ -177,6 +179,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     _loading = true;
     _error = null;
     _noLyrics = false;
+    _upgrading = false;
     _lines = null;
     _fetch(key, book.bvid, chapter.cid);
   }
@@ -197,6 +200,15 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           _loading = false;
           _noLyrics = lines == null || lines.isEmpty;
         });
+        // 下载的 LRC 只有行级时间戳，字级跟声需要词级转写：
+        // 文稿存在但无词级时间戳 → 后台百度转写升级，完成后刷新
+        final hasWord = (lines ?? const <LyricLine>[])
+            .any((l) => l.words != null && l.words!.isNotEmpty);
+        if (lines != null && lines.isNotEmpty && !hasWord) {
+          if (localPath != null && localPath.isNotEmpty) {
+            _upgradeLyrics(key, localPath);
+          }
+        }
         return;
       }
       try {
@@ -223,6 +235,32 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     _loadedKey = null;
     _maybeLoad();
     setState(() {});
+  }
+
+  /// 行级 LRC → 后台百度转写升级为词级文稿，完成后刷新视图（逐字跟声）。
+  /// 未配置转写 / 失败静默：保持现有行级文稿不打扰播放。
+  Future<void> _upgradeLyrics(String key, String localPath) async {
+    if (!mounted || _loadedKey != key) return;
+    setState(() => _upgrading = true);
+    try {
+      final upgraded = await LocalLibrary.instance
+          .upgradeLyricsToWordLevel(File(localPath));
+      if (!mounted || _loadedKey != key) return;
+      if (!upgraded) {
+        setState(() => _upgrading = false);
+        return;
+      }
+      final lines = LyricsParser.readLyricsFile(File(localPath));
+      setState(() {
+        _upgrading = false;
+        _lines = lines ?? const <LyricLine>[];
+        _noLyrics = false;
+      });
+    } catch (e) {
+      debugPrint('[Cadenza] 词级文稿升级失败（忽略）: $e');
+      if (!mounted || _loadedKey != key) return;
+      setState(() => _upgrading = false);
+    }
   }
 
   // ---------- 工具 ----------
@@ -576,6 +614,9 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             ? '本章暂无文稿\n去章节页点「文稿」导入 txt / LRC / SRT\n（点空白返回封面）'
             : '本集暂无文稿\n（点空白返回封面）',
       );
+    }
+    if (_upgrading) {
+      return _statusBox('正在生成词级文稿…\n（转写完成后歌词将逐字跟声）', loading: true);
     }
 
     return LayoutBuilder(
