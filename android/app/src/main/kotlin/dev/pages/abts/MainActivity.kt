@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.app.PendingIntent
 import android.content.pm.PackageInstaller
 import android.provider.Settings
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -198,18 +199,27 @@ class MainActivity : AudioServiceActivity() {
             try {
                 val sessionParams =
                     PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-                val session =
-                    packageManager.packageInstaller.createSession(sessionParams)
-                file.inputStream().use { input ->
-                    val out = session.openWrite(file.name, 0, file.length())
-                    input.copyTo(out)
-                    session.fsync(out)
-                    out.close()
+                // createSession 返回会话 ID，须再 openSession 拿到可写会话
+                val sessionId = packageManager.packageInstaller.createSession(sessionParams)
+                val session = packageManager.packageInstaller.openSession(sessionId)
+                try {
+                    file.inputStream().use { input ->
+                        val out = session.openWrite(file.name, 0, file.length())
+                        input.copyTo(out)
+                        session.fsync(out)
+                        out.close()
+                    }
+                    // commit 后系统会弹出安装确认界面（非 root 必现）；
+                    // 结果通过 statusReceiver 回调（此处回调无消费方，仅满足非空参数）
+                    val statusReceiver = PendingIntent.getActivity(
+                        this, 0, Intent(this, MainActivity::class.java),
+                        PendingIntent.FLAG_IMMUTABLE,
+                    ).intentSender
+                    session.commit(statusReceiver)
+                    return mapOf("ok" to true, "message" to "已提交系统安装，请按屏幕提示完成安装")
+                } finally {
+                    session.close()
                 }
-                // commit 后系统会弹出安装确认界面（非 root 必现）
-                session.commit(null)
-                session.close()
-                return mapOf("ok" to true, "message" to "已提交系统安装，请按屏幕提示完成安装")
             } catch (e: Exception) {
                 // 权限不足 / ROM 不支持：继续走 ACTION_VIEW 兜底
             }
