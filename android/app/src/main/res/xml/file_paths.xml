@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 内置更新：允许 FileProvider 对外共享 filesDir 下的 APK 文件 -->
+<!-- 内置更新：允许 FileProvider 对外共享 APK 文件。
+     Flutter getApplicationDocumentsDirectory 指向 app_flutter/，
+     下载目录为 app_flutter/updates/，必须显式声明否则 FileProvider
+     抛 "Failed to find configured root" -->
 <paths>
     <files-path name="internal" path="." />
+    <files-path name="app_flutter" path="app_flutter/" />
 </paths>

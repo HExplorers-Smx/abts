@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/network/api_config.dart';
+import '../core/storage/shelf_store.dart';
 import '../models/audio_stream.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
@@ -124,6 +125,8 @@ class DownloadManager extends ChangeNotifier {
   /// 加入下载队列（单章）。已存在且完成/进行中则不重复入队；
   /// 失败的任务再次点击视为重试。
   Future<void> enqueue(Book book, Chapter chapter, int index) async {
+    // 发起下载即入书架（幂等），无需先播放才在书架出现
+    unawaited(ShelfStore.instance.add(book));
     final existing = _store.taskFor(book.bvid, chapter.cid);
     if (existing != null) {
       if (existing.completed) return;
@@ -160,6 +163,8 @@ class DownloadManager extends ChangeNotifier {
   Future<void> enqueueSelected(
       Book book, List<Chapter> chapters, List<int> indices) async {
     if (chapters.isEmpty || indices.isEmpty) return;
+    // 发起下载即入书架（幂等）
+    unawaited(ShelfStore.instance.add(book));
     final fresh = <DownloadTask>[];
     for (final i in indices) {
       if (i < 0 || i >= chapters.length) continue;
@@ -200,6 +205,8 @@ class DownloadManager extends ChangeNotifier {
   Future<void> enqueueAll(Book book) async {
     final chapters = book.chapters;
     if (chapters == null || chapters.isEmpty) return;
+    // 发起下载即入书架（幂等）
+    unawaited(ShelfStore.instance.add(book));
     final fresh = <DownloadTask>[];
     for (var i = 0; i < chapters.length; i++) {
       final ch = chapters[i];

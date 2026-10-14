@@ -194,6 +194,9 @@ class MainActivity : AudioServiceActivity() {
             return mapOf("ok" to false, "message" to "安装包不存在或未下载完整，请重新下载")
         }
 
+        // 记录 PackageInstaller 失败原因（供兜底提示与排查）
+        var sessionError: String? = null
+
         // 1) PackageInstaller 会话安装（Android 5.0+）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             try {
@@ -221,7 +224,8 @@ class MainActivity : AudioServiceActivity() {
                     session.close()
                 }
             } catch (e: Exception) {
-                // 权限不足 / ROM 不支持：继续走 ACTION_VIEW 兜底
+                // 权限不足 / ROM 不支持：记录原因，继续走 ACTION_VIEW 兜底
+                sessionError = e.message
             }
         }
 
@@ -243,7 +247,14 @@ class MainActivity : AudioServiceActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             startActivity(intent)
-            mapOf("ok" to true, "message" to "已拉起系统安装器，请按屏幕提示完成安装")
+            if (sessionError.isNullOrEmpty()) {
+                mapOf("ok" to true, "message" to "已拉起系统安装器，请按屏幕提示完成安装")
+            } else {
+                mapOf(
+                    "ok" to true,
+                    "message" to "已拉起系统安装器（会话安装不可用：$sessionError），请按屏幕提示完成安装",
+                )
+            }
         } catch (e: Exception) {
             // 3) 仍失败：引导「安装未知来源应用」权限
             if (!canInstallApk()) {
