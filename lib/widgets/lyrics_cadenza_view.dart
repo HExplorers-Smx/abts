@@ -366,15 +366,16 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     if (curRowIdx < 0) curRowIdx = rows.length - 1;
     final curRow = rows[curRowIdx];
 
-    // hero = 当前行时间居中的碎片（folia 中心偏置强调 → 放大 1.46 居中）
+    // hero = 当前行时间居中的碎片（folia 中心偏置强调 → 放大居中，手机端适度 1.28）
     final heroIdx = curRow.frags.length ~/ 2;
     final heroText = curRow.frags[heroIdx];
-    const heroScale = 1.46;
+    const heroScale = 1.28;
     final heroW = _measureWidth(heroText) * heroScale;
     final heroH = _fontSize * _lineHeight * heroScale;
+    final heroY = -_fontSize * 0.4;
 
-    // 1) hero 先占位居中
-    occupy(0, 0, heroW, heroH, 12);
+    // 1) hero 先占位（居中偏上，避开底部控件区）
+    occupy(0, heroY, heroW, heroH, 12);
     placements.add(_Placement(
       text: heroText,
       lineIndex: curRow.li,
@@ -383,7 +384,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       width: heroW,
       height: heroH,
       x: 0,
-      y: 0,
+      y: heroY,
       scale: heroScale,
       rotate: 0,
       passedRotate: -8,
@@ -393,9 +394,10 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     ));
 
     // 2) 其余碎片：按句序在行内铺开（保持原句读顺序），种子微扰 + hero 推挤 +
-    //    螺旋搜索避让碰撞；passed 漂移方向 = 从屏幕中心向外
-    final rowGap = _fontSize * _lineHeight * 1.6;
-    final spacing = _fontSize * 0.5;
+    //    螺旋搜索避让碰撞；passed 漂移方向 = 从屏幕中心向外。
+    //    手机端适配：前/后句弱化缩小（氛围感），当前句为主、行宽不顶边。
+    final rowGap = _fontSize * _lineHeight * 2.5;
+    final spacing = _fontSize * 0.34;
     final maxR = math.max(h * 0.5, 120).toDouble();
     final step = math.max(10, _fontSize * 0.14).round();
 
@@ -404,23 +406,49 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       final rowOffsetY = row.li < active
           ? -rowGap
           : (row.li > active ? rowGap : 0.0);
+      final isCur = ri == curRowIdx;
 
-      // 行内宽度与每片缩放（非 hero 微随机，形成大小差异的散落感）
+      // 行内宽度与每片缩放：当前句大小相近（0.96~1.06），前后句整体缩小弱化
       final scales = <double>[];
       var totalW = 0.0;
       for (var i = 0; i < row.frags.length; i++) {
-        final isHero = ri == curRowIdx && i == heroIdx;
+        final isHero = isCur && i == heroIdx;
         final sc = isHero
             ? heroScale
-            : 0.92 + _randOf(row.li * 31 + i * 13 + 7, 8) * 0.16;
+            : isCur
+                ? 0.96 + _randOf(row.li * 31 + i * 13 + 7, 8) * 0.1
+                : 0.66 + _randOf(row.li * 31 + i * 13 + 7, 9) * 0.12;
         scales.add(sc);
         totalW +=
             _measureWidth(row.frags[i]) * sc + (i == 0 ? 0 : spacing);
       }
+      // 行宽超屏自适应：只缩非 hero 碎片宽度（hero 渲染恒定 1.28，
+      // 字间距不缩放），保证排布总宽 = maxRowW、行不顶边
+      final maxRowW = isCur ? w * 0.82 : w * 0.86;
+      final heroCw = _measureWidth(heroText) * heroScale;
+      final allSpacing = math.max(row.frags.length - 1, 0) * spacing;
+      if (totalW > maxRowW) {
+        final nonHeroCwTotal = totalW - heroCw - allSpacing;
+        final targetNonHeroCw = maxRowW - heroCw - allSpacing;
+        if (nonHeroCwTotal > 1 && targetNonHeroCw > 1) {
+          final ratio = targetNonHeroCw / nonHeroCwTotal;
+          for (var i = 0; i < scales.length; i++) {
+            if (!(isCur && i == heroIdx)) {
+              scales[i] = scales[i] * ratio;
+            }
+          }
+        }
+        totalW = maxRowW;
+      }
       var xPos = -totalW / 2;
 
       for (var i = 0; i < row.frags.length; i++) {
-        if (ri == curRowIdx && i == heroIdx) continue; // hero 已放置
+        if (ri == curRowIdx && i == heroIdx) {
+          // hero 已单独居中放置：行内保留其槽位宽度，避免右侧碎片与 hero
+          // 初始重叠而触发螺旋避让整排外推（行边界被打破）
+          xPos += heroW + spacing;
+          continue;
+        }
         final text = row.frags[i];
         final sc = scales[i];
         final cw = _measureWidth(text) * sc;
@@ -431,9 +459,13 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           return x - x.floorToDouble();
         }
 
-        // 目标点：行序 x + 种子微扰（folia 保持句序，碰撞推挤制造错落）
-        var px = xPos + cw / 2 + (rand(5) - 0.5) * _fontSize * 0.7;
-        var py = rowOffsetY + (rand(6) - 0.5) * _fontSize * 0.5;
+        // 目标点：行序 x + 种子微扰（folia 保持句序，碰撞推挤制造错落）。
+        // 首尾碎片不横向扰动，保持行边界整齐不顶边
+        final isEdge = i == 0 || i == row.frags.length - 1;
+        final jitterX = isEdge ? 0.0 : (isCur ? _fontSize * 0.32 : _fontSize * 0.45);
+        final jitterY = isCur ? _fontSize * 0.26 : _fontSize * 0.34;
+        var px = xPos + cw / 2 + (rand(5) - 0.5) * jitterX;
+        var py = rowOffsetY + (rand(6) - 0.5) * jitterY;
 
         // 与 hero 的推挤分离（folia minHeroSeparation）
         final hd = math.sqrt(px * px + py * py);
@@ -443,11 +475,13 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           py += py / hd * (minSep - hd) * 0.92;
         }
 
-        // 螺旋搜索避让碰撞；兜底 = 边界内重叠最小
+        // 螺旋搜索避让碰撞；兜底 = 行内/屏内重叠最小。
+        // 横向边界用「行宽一半」而非屏宽，避让不会把碎片推出本行（手机端不顶边）
+        final rowHalf = isCur ? w * 0.41 : w * 0.43;
         final baseAngle = math.atan2(py, px + cw / 2);
         var chosenX = px, chosenY = py, found = false;
         var fallbackX = px
-            .clamp(-w / 2 + cw / 2 + w * 0.05, w / 2 - cw / 2 - w * 0.05)
+            .clamp(-rowHalf + cw / 2 + w * 0.02, rowHalf - cw / 2 - w * 0.02)
             .toDouble();
         var fallbackY = py
             .clamp(-h / 2 + chH / 2 + h * 0.04, h / 2 - chH / 2 - h * 0.04)
@@ -464,7 +498,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             final l = px + rx - cw / 2;
             final t = py + ry - chH / 2;
             final r = l + cw, b = t + chH;
-            if (l < -w / 2 + cw * 0.3 || r > w / 2 - cw * 0.3 ||
+            if (l < -rowHalf + cw * 0.3 || r > rowHalf - cw * 0.3 ||
                 t < -h / 2 + chH * 0.3 || b > h / 2 - chH * 0.3) {
               continue;
             }
@@ -666,12 +700,12 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
       glow = 0.9 * fade;
     }
 
-    // 行级包络：当前行最亮；后句弱化等待；前句随漂移淡出
+    // 行级包络（手机端）：当前行最亮；前/后句整体弱化，只作氛围；前句随漂移淡出
     final alpha = isActiveLine
         ? 1.0
         : (isBefore
-            ? (1 - drift * 0.92).clamp(0.15, 1.0).toDouble()
-            : 0.7);
+            ? (0.4 * (1 - drift * 0.7)).clamp(0.06, 0.4).toDouble()
+            : 0.42);
 
     // 颜色：未唱主题暗色 → 正在唱渐入主题亮色（folia bodyMix）
     final color = Color.lerp(_baseColor, _sungColor, mix) ?? _baseColor;
