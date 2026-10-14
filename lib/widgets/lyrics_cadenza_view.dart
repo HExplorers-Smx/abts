@@ -550,8 +550,37 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
   }
 
   /// 背景：封面模糊底 + 氛围光晕
+  ///
+  /// 封面只在「成功加载」后才叠加暗化遮罩：本地文件封面用 Image.file，
+  /// 在线封面用 Image.network；无封面 / 加载失败 / 加载中都不绘制遮罩，
+  /// 只保留淡淡的氛围光晕（透明），避免出现整块黑屏。
   Widget _backdrop(double w, double h) {
     final url = widget.coverUrl;
+    ImageProvider? provider;
+    if (url != null && url.isNotEmpty) {
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        provider = NetworkImage(url);
+      } else {
+        final f = File(url);
+        if (f.existsSync()) provider = FileImage(f);
+      }
+    }
+    final Widget? coverLayer = provider == null
+        ? null
+        : Image(
+            image: provider,
+            fit: BoxFit.cover,
+            cacheWidth: 480,
+            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+            frameBuilder: (_, child, frame, _) {
+              if (frame == null) return child;
+              // 封面真正显示出来后才叠暗化遮罩
+              return Stack(fit: StackFit.expand, children: [
+                child,
+                Container(color: Colors.black.withValues(alpha: 0.62)),
+              ]);
+            },
+          );
     return IgnorePointer(
       child: Container(
         width: w,
@@ -567,22 +596,11 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             ],
           ),
         ),
-        child: url == null || url.isEmpty
+        child: coverLayer == null
             ? null
             : ClipRRect(
                 borderRadius: BorderRadius.circular(18),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Image.network(
-                      url,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                      cacheWidth: 480,
-                    ),
-                    Container(color: Colors.black.withValues(alpha: 0.62)),
-                  ],
-                ),
+                child: coverLayer,
               ),
       ),
     );
