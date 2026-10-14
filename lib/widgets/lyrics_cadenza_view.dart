@@ -570,7 +570,6 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
         : Image(
             image: provider,
             fit: BoxFit.cover,
-            cacheWidth: 480,
             errorBuilder: (_, _, _) => const SizedBox.shrink(),
             frameBuilder: (_, child, frame, _) {
               if (frame == null) return child;
