@@ -24,6 +24,9 @@ class BaiduAsr {
   static const _queryUrl = 'https://aip.baidubce.com/rpc/2.0/aasr/v1/query';
 
   static const _prefsAppId = 'baidu_asr_appid';
+
+  /// 最近一次转写失败原因（供 UI 展示，替代静默失败）
+  static String? lastError;
   static const _prefsApiKey = 'baidu_asr_api_key';
   static const _prefsSecretKey = 'baidu_asr_secret_key';
   static const _prefsEnabled = 'baidu_asr_enabled';
@@ -95,7 +98,10 @@ class BaiduAsr {
   }) async {
     try {
       final token = await _accessToken(apiKey, secretKey);
-      if (token == null) return null;
+      if (token == null) {
+        lastError = '授权失败：请检查 API Key / Secret Key 是否与控制台一致（32 位）';
+        return null;
+      }
       onStage?.call('正在获取识别授权…');
       final bytes = await audio.readAsBytes();
       if (bytes.isEmpty) return null;
@@ -129,6 +135,7 @@ class BaiduAsr {
       );
       final cd = create.data as Map? ?? {};
       if ((cd['error_code'] as num?)?.toInt() != 0) {
+        lastError = '提交失败：${cd['error_code']} ${cd['error_msg']}';
         debugPrint('[BaiduAsr] create 失败: ${cd['error_msg']}');
         return null;
       }
@@ -160,14 +167,18 @@ class BaiduAsr {
           return lines == null || lines.isEmpty ? null : lines;
         }
         if (status == 'error' || status == 'failed' || status == 'cancel') {
+          lastError = '识别失败：$status'
+              '（${info?['error_code'] ?? ''} ${info?['error_msg'] ?? ''}）';
           debugPrint('[BaiduAsr] 任务失败: $status');
           return null;
         }
       }
       debugPrint('[BaiduAsr] 转写超时');
+      lastError = '识别超时（${timeoutSeconds}s）';
       return null;
     } catch (e) {
       debugPrint('[BaiduAsr] 转写异常: $e');
+      lastError = '转写异常：$e';
       return null;
     }
   }

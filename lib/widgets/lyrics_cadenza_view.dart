@@ -10,6 +10,7 @@ import '../core/theme/app_theme.dart';
 import '../models/lyric_line.dart';
 import '../player/book_player.dart';
 import '../services/bili_api.dart';
+import '../services/baidu_asr.dart';
 import '../services/download_store.dart';
 import '../services/local_library.dart';
 import '../services/lyrics_parser.dart';
@@ -96,6 +97,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
   String? _error;
   bool _noLyrics = false;
   bool _upgrading = false; // 正在后台生成词级文稿（行级 LRC → 词级转写）
+  String? _upgradeError; // 词级文稿生成失败原因（百度返回）
 
   // 布局缓存（窗口行变化时重算）
   int _layoutLineIndex = -1;
@@ -180,6 +182,7 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     _error = null;
     _noLyrics = false;
     _upgrading = false;
+    _upgradeError = null;
     _lines = null;
     _fetch(key, book.bvid, chapter.cid);
   }
@@ -247,7 +250,10 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
           .upgradeLyricsToWordLevel(File(localPath));
       if (!mounted || _loadedKey != key) return;
       if (!upgraded) {
-        setState(() => _upgrading = false);
+        setState(() {
+          _upgrading = false;
+          _upgradeError = BaiduAsr.lastError ?? '未配置语音转写（设置页）';
+        });
         return;
       }
       final lines = LyricsParser.readLyricsFile(File(localPath));
@@ -259,7 +265,10 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
     } catch (e) {
       debugPrint('[Cadenza] 词级文稿升级失败（忽略）: $e');
       if (!mounted || _loadedKey != key) return;
-      setState(() => _upgrading = false);
+      setState(() {
+        _upgrading = false;
+        _upgradeError = BaiduAsr.lastError ?? '转写异常：$e';
+      });
     }
   }
 
@@ -614,6 +623,9 @@ class _LyricsCadenzaViewState extends State<LyricsCadenzaView>
             ? '本章暂无文稿\n去章节页点「文稿」导入 txt / LRC / SRT\n（点空白返回封面）'
             : '本集暂无文稿\n（点空白返回封面）',
       );
+    }
+    if (_upgradeError != null) {
+      return _statusBox('词级文稿生成失败：\n$_upgradeError\n（已保留行级歌词，重新播放本集可重试）');
     }
     if (_upgrading) {
       return _statusBox('正在生成词级文稿…\n（转写完成后歌词将逐字跟声）', loading: true);
