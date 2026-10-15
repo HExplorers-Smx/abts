@@ -342,9 +342,11 @@ class _LocalBookDetailPageState extends State<LocalBookDetailPage> {
       Navigator.of(context, rootNavigator: true).pop(); // 关闭进度弹窗
     }
     if (lines == null || lines.isEmpty) {
+      final reason = BaiduAsr.lastError ?? '未知原因';
       messenger.showSnackBar(
-        const SnackBar(content: Text('转写失败，请检查凭证/网络/免费额度'),
-            duration: Duration(seconds: 3)),
+        SnackBar(
+            content: Text('转写失败：$reason（可到控制台检查服务授权/免费额度）'),
+            duration: const Duration(seconds: 6)),
       );
       return;
     }
